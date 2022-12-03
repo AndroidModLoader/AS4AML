@@ -35,7 +35,7 @@ void MessageCallback(const asSMessageInfo *msg, void *param)
 void SimplePrint(std::string &msg)
 {
     asIScriptContext *ctx = asGetActiveContext();
-    logger->Info("%s: %s", ctx->GetFunction(0)->GetModuleName(), msg.c_str());
+    logger->Info("<%s>: %s", ctx->GetFunction(0)->GetModuleName(), msg.c_str());
 }
 inline bool EndsWithAS(const char* base)
 {
