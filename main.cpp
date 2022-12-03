@@ -24,6 +24,7 @@ MYMODCFG(net.rusjj.as4aml, AngelScript for AML, 1.0, RusJJ)
 asIScriptEngine *engine;
 extern CScriptBuilder* builder;
 
+void AddAS4AMLFuncs();
 void MessageCallback(const asSMessageInfo *msg, void *param)
 {
     if(msg->type == asMSGTYPE_WARNING || msg->type == asMSGTYPE_INFORMATION) 
@@ -33,7 +34,8 @@ void MessageCallback(const asSMessageInfo *msg, void *param)
 }
 void SimplePrint(std::string &msg)
 {
-    logger->Info("ScriptPrint: %s", msg.c_str());
+    asIScriptContext *ctx = asGetActiveContext();
+    logger->Info("%s: %s", ctx->GetFunction(0)->GetModuleName(), msg.c_str());
 }
 inline bool EndsWithAS(const char* base)
 {
@@ -118,6 +120,7 @@ extern "C" void OnModPreLoad()
     
     // Some basic funcs
     engine->RegisterGlobalFunction("void print(const string &in)", asFUNCTION(SimplePrint), asCALL_CDECL);
+    AddAS4AMLFuncs();
     
     // Register an interface
     RegisterInterface("AngelScript", engine);
