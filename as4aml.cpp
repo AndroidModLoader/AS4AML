@@ -148,7 +148,7 @@ void DoScriptsCall(std::string &fnDecl)
             int r = ctx->Execute();
             if( r == asEXECUTION_EXCEPTION )
             {
-                logger->Error("An exception '%s' occurred. Please correct the code and try again.\n", ctx->GetExceptionString());
+                logger->Error("An exception occurred:\n%s", ctx->GetExceptionString());
             }
             ctx->Release();
         }
@@ -168,7 +168,7 @@ uintptr_t GetLibraryAddress(std::string &lib)
 }
 uintptr_t GetLibraryHandle(std::string &lib)
 {
-    return (uint32_t)dlopen(lib.c_str(), RTLD_LAZY);
+    return (uintptr_t)dlopen(lib.c_str(), RTLD_LAZY);
 }
 uintptr_t GetLibraryHandleSymbol(uintptr_t &hndl, std::string &sym)
 {

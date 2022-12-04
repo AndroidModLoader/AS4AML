@@ -13,7 +13,7 @@
 
 #include <datetime/datetime.h>
 #include <scriptarray/scriptarray.h>
-#include <scriptbuilder/scriptbuilder.h>
+#include <amlscriptbuilder.h>
 #include <scripthandle/scripthandle.h>
 #include <scripthelper/scripthelper.h>
 #include <scriptmath/scriptmath.h>
@@ -22,12 +22,13 @@
 MYMODCFG(net.rusjj.as4aml, AngelScript for AML, 1.0, RusJJ)
 
 asIScriptEngine *engine;
-extern CScriptBuilder* builder;
 
 void AddAS4AMLFuncs();
 void MessageCallback(const asSMessageInfo *msg, void *param)
 {
-    if(msg->type == asMSGTYPE_WARNING || msg->type == asMSGTYPE_INFORMATION) 
+    if(msg->type == asMSGTYPE_WARNING)
+        logger->Print(LogP_Warn, "%s (%d, %d) : %s", msg->section, msg->row, msg->col, msg->message);
+    else if(msg->type == asMSGTYPE_INFORMATION) 
         logger->Info("%s (%d, %d) : %s", msg->section, msg->row, msg->col, msg->message);
     else
         logger->Error("%s (%d, %d) : %s", msg->section, msg->row, msg->col, msg->message);
@@ -71,9 +72,8 @@ void LoadAS(const char* path)
                 logger->Error("Failed to load a script!");
                 continue;
             }
-            builder->BuildModule();
             
-            asIScriptFunction *func = builder->GetModule()->GetFunctionByDecl("void main()");
+            asIScriptFunction *func = builder->BuildAMLModule()->GetFunctionByDecl("void main()");
             if(func)
             {
                 asIScriptContext *ctx = engine->CreateContext();
@@ -81,7 +81,7 @@ void LoadAS(const char* path)
                 r = ctx->Execute();
                 if( r == asEXECUTION_EXCEPTION )
                 {
-                    logger->Error("An exception '%s' occurred. Please correct the code and try again.\n", ctx->GetExceptionString());
+                    logger->Error("An exception occurred:\n%s", ctx->GetExceptionString());
                 }
                 ctx->Release();
             }
@@ -109,7 +109,7 @@ extern "C" void OnModPreLoad()
     logger->Info("AngelScript has been started!");
     engine->SetMessageCallback(asFUNCTION(MessageCallback), 0, asCALL_CDECL);
     
-    // add-ons
+    // Add-ons
     RegisterStdString(engine);
     RegisterScriptDateTime(engine);
     RegisterScriptArray(engine, true);
@@ -124,6 +124,7 @@ extern "C" void OnModPreLoad()
     
     // Register an interface
     RegisterInterface("AngelScript", engine);
+    RegisterInterface("AS4AML", as4aml);
 }
 
 extern "C" void OnAllModsLoaded()
@@ -155,7 +156,7 @@ extern "C" void OnAllModsLoaded()
             int r = ctx->Execute();
             if( r == asEXECUTION_EXCEPTION )
             {
-                logger->Error("An exception '%s' occurred. Please correct the code and try again.\n", ctx->GetExceptionString());
+                logger->Error("An exception occurred:\n%s", ctx->GetExceptionString());
             }
             ctx->Release();
         }
@@ -167,5 +168,5 @@ extern "C" void OnModUnload()
     engine->Release();
 }
 
-static CScriptBuilder builderLocal;
-CScriptBuilder* builder = &builderLocal;
+static AMLScriptBuilder builderLocal;
+AMLScriptBuilder* builder = &builderLocal;

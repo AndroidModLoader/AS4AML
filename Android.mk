@@ -3,7 +3,7 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 LOCAL_CPP_EXTENSION := .cpp .cc
 LOCAL_MODULE    := AS4AML
-LOCAL_SRC_FILES := main.cpp as4aml.cpp mod/logger.cpp mod/config.cpp
+LOCAL_SRC_FILES := main.cpp as4aml.cpp amlscriptbuilder.cpp mod/logger.cpp mod/config.cpp
 FILE_LIST += $(wildcard $(LOCAL_PATH)/sdk/angelscript/source/*.cpp)
 FILE_LIST += $(wildcard $(LOCAL_PATH)/sdk/angelscript/source/*.S)
 FILE_LIST += $(wildcard $(LOCAL_PATH)/sdk/add_on/scriptarray/*.cpp)
