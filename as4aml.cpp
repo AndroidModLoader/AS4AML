@@ -20,6 +20,7 @@ int32_t GetPtrAddrInt(uintptr_t ptr) { return *(int32_t*)ptr; }
 uint32_t GetPtrAddrUInt(uintptr_t ptr) { return *(uint32_t*)ptr; }
 int64_t GetPtrAddrInt64(uintptr_t ptr) { return *(int64_t*)ptr; }
 uint64_t GetPtrAddrUInt64(uintptr_t ptr) { return *(uint64_t*)ptr; }
+std::string GetPtrAddrString(uintptr_t ptr) { return *(const char**)ptr; }
 
 void SetPtrAddrFloat(uintptr_t ptr, float val) { *(float*)ptr = val; }
 void SetPtrAddrDouble(uintptr_t ptr, double val) { *(double*)ptr = val; }
@@ -230,6 +231,7 @@ void AddAS4AMLFuncs()
     engine->RegisterGlobalFunction("uint AML_GetPtrAddrUInt(const uint64 &in)", asFUNCTION(GetPtrAddrUInt), asCALL_STDCALL);
     engine->RegisterGlobalFunction("int64 AML_GetPtrAddrInt64(const uint64 &in)", asFUNCTION(GetPtrAddrInt64), asCALL_STDCALL);
     engine->RegisterGlobalFunction("uint64 AML_GetPtrAddrUInt64(const uint64 &in)", asFUNCTION(GetPtrAddrUInt64), asCALL_STDCALL);
+    engine->RegisterGlobalFunction("string AML_GetPtrAddrString(const uint64 &in)", asFUNCTION(GetPtrAddrString), asCALL_STDCALL);
     
     engine->RegisterGlobalFunction("void AML_SetPtrAddrFloat(const uint64 &in, const float &in)", asFUNCTION(SetPtrAddrFloat), asCALL_CDECL);
     engine->RegisterGlobalFunction("void AML_SetPtrAddrDouble(const uint64 &in, const double &in)", asFUNCTION(SetPtrAddrDouble), asCALL_CDECL);
@@ -254,6 +256,7 @@ void AddAS4AMLFuncs()
     engine->RegisterGlobalFunction("uint AML_GetPtrAddrUInt(const uint &in)", asFUNCTION(GetPtrAddrUInt), asCALL_STDCALL);
     engine->RegisterGlobalFunction("int64 AML_GetPtrAddrInt64(const uint &in)", asFUNCTION(GetPtrAddrInt64), asCALL_STDCALL);
     engine->RegisterGlobalFunction("uint64 AML_GetPtrAddrUInt64(const uint &in)", asFUNCTION(GetPtrAddrUInt64), asCALL_STDCALL);
+    engine->RegisterGlobalFunction("string AML_GetPtrAddrString(const uint &in)", asFUNCTION(GetPtrAddrString), asCALL_STDCALL);
     
     engine->RegisterGlobalFunction("void AML_SetPtrAddrFloat(const uint &in, const float &in)", asFUNCTION(SetPtrAddrFloat), asCALL_CDECL);
     engine->RegisterGlobalFunction("void AML_SetPtrAddrDouble(const uint &in, const double &in)", asFUNCTION(SetPtrAddrDouble), asCALL_CDECL);
