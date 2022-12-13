@@ -1999,7 +1999,6 @@ void asCBuilder::CompleteFuncDef(sFuncDef *funcDef)
 				fdt2->funcdef->IsSignatureExceptNameEqual(func) )
 			{
 				// Replace our funcdef for the existing one
-				funcDef->idx = fdt2->funcdef->id;
 				module->ReplaceFuncDef(fdt, fdt2);
 				fdt2->AddRefInternal();
 
@@ -2022,7 +2021,7 @@ void asCBuilder::CompleteFuncDef(sFuncDef *funcDef)
 
 	// Remember if the type was declared as external so the saved bytecode can be flagged accordingly
 	if (funcTraits.GetTrait(asTRAIT_EXTERNAL) && found)
-		module->m_externalTypes.PushLast(engine->scriptFunctions[funcDef->idx]->funcdefType);
+		module->m_externalTypes.PushLast(engine->scriptFunctions[module->m_funcDefs[funcDef->idx]->GetFuncdefSignature()->GetId()]->funcdefType);
 }
 
 int asCBuilder::RegisterGlobalVar(asCScriptNode *node, asCScriptCode *file, asSNameSpace *ns)
@@ -5721,10 +5720,21 @@ asSNameSpace *asCBuilder::GetNameSpaceFromNode(asCScriptNode *node, asCScriptCod
 		}
 	}
 
+	// If the scope doesn't start with '::' then prepend the implicit scope to give the full scope
+	asCString originalScope = scope;
+	if (scope.SubString(0, 2) != "::" && implicitNs && implicitNs->name.GetLength() > 0 )
+		scope = implicitNs->name + "::" + scope;
+
 	asCTypeInfo *ti = 0;
-	asSNameSpace *ns = GetNameSpaceByString(scope, implicitNs ? implicitNs : engine->nameSpaces[0], node, script, &ti);
+	asSNameSpace *ns = GetNameSpaceByString(scope, implicitNs ? implicitNs : engine->nameSpaces[0], node, script, &ti, scope == originalScope);
+
+	// If the namespace wasn't found try again with the original scope as it may be a fully identified scope
+	if (scope != originalScope && ns == 0)
+		ns = GetNameSpaceByString(originalScope, implicitNs ? implicitNs : engine->nameSpaces[0], node, script, &ti, true);
+
 	if (ti && objType)
 		*objType = CastToObjectType(ti);
+
 	return ns;
 }
 
