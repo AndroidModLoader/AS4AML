@@ -19,7 +19,7 @@
 #include <scriptmath/scriptmath.h>
 #include <scriptstdstring/scriptstdstring.h>
 
-MYMODCFG(net.rusjj.as4aml, AngelScript for AML, 1.0, RusJJ)
+MYMODCFG(net.rusjj.as4aml, AngelScript for AML, 0.1, RusJJ)
 
 asIScriptEngine *engine;
 
@@ -108,6 +108,10 @@ extern "C" void OnModPreLoad()
     }
     logger->Info("AngelScript has been started!");
     engine->SetMessageCallback(asFUNCTION(MessageCallback), 0, asCALL_CDECL);
+    
+    #ifdef AS4AML_NO_LINE_CUES
+    engine->SetEngineProperty(asEP_BUILD_WITHOUT_LINE_CUES, true);
+    #endif // AS4AML_NO_LINE_CUES
     
     // Add-ons
     RegisterStdString(engine);

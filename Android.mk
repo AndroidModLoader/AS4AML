@@ -15,7 +15,7 @@ FILE_LIST += $(wildcard $(LOCAL_PATH)/sdk/add_on/scripthandle/*.cpp)
 FILE_LIST += $(wildcard $(LOCAL_PATH)/sdk/add_on/datetime/*.cpp)
 # Finalize wildcards
 LOCAL_SRC_FILES += $(FILE_LIST:$(LOCAL_PATH)/%=%)
-LOCAL_CFLAGS += -O2 -mfloat-abi=softfp -DNDEBUG -std=c++14
+LOCAL_CFLAGS += -O2 -mfloat-abi=softfp -DNDEBUG -std=c++14 -DAS_NO_THREADS -DAS4AML_NO_LINE_CUES
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/sdk/angelscript/include \
                     $(LOCAL_PATH)/sdk/add_on
 LOCAL_LDLIBS += -llog
