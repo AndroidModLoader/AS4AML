@@ -15,7 +15,7 @@ BODY { FONT-SIZE: 12px; FONT-FAMILY: Arial; }
 
 <h1>AngelScript Change Log</h1>
 
-<h2>Version 2.36.1 WIP - 2022/12/10</h2>
+<h2>Version 2.36.1 WIP - 2023/03/18</h2>
 
 <ul>
 <li>Bug fixes
@@ -30,20 +30,37 @@ BODY { FONT-SIZE: 12px; FONT-FAMILY: Arial; }
 <li>Fixed crash in compiler when same funcdef declaration is compiled multiple times in different modules (Thanks Alexander Orefkov)
 <li>Fixed lookup bug with use of partial namespace in scope when already within a namespace (Thanks xertrov)
 <li>Fixed assert failure in compiler when class has invalid opCast method with parameters (Thanks Patrick Jeeves)
+<li>Parser failed to understand lambda functions with explicit argument types with &amp;in, &amp;out, or &amp;inout (Thanks Patrick Jeeves)
+<li>Fixed bug with use of default array on types without default constructors (Thanks Patrick Jeeves)
+<li>Fixed bug with named args and construct calls (Thanks Patrick Jeeves)
+<li>Fixed bug with variables declared in for loop being seen as in-scope by debugger after the loop ended (Thanks gmp3 labs)
+<li>Fixed name conflict error for lambdas being rebuilt multiple times with CompileFunction (Thanks gmp3 labs)
+<li>Fixed assert failure when explicitly casting anonymous init list to an object (Thanks xertrov)
+<li>Fixed assert failure on bitwise operation with boolean value (Thanks Miss)
+<li>Fixed issue in compiler with unsafe references enabled and &amp;out parameters (Thanks Dragonstorm97)
+<li>Compiler now gives proper error when using temporary object for lvalue in assignment
+<li>BindImportedFunction was not giving error when attempting to bind class method (Thanks Denis Naumov)
+<li>Fixed bug in save bytecode when there were multiple variables in different scope occupying the same stack position (Thanks Sam Tupy)
+<li>Fixed bug in as_callfunc_x64_gcc.cpp when compiling with optimizations on gnuc (Thanks Patrick Jeeves)
+<li>Fixed bug in compiler with compound assignment, virtual property, and unsafe references (Thanks Sam Tupy)
 </ul>
 <li>Library
 <ul>
 <li>Improved the error message when a boolean expression is required to inform the type that was given (Thanks Solokiller)
+<li>Improved error message when delegate object cannot be created (Thanks Patrick Jeeves)
 </ul>
 <li>Script language
 <ul>
 <li>Compiler now recognizes when switch cases have return in all paths (Thanks alpines)
+<li>Anonymous functions can now be declared with nameless arguments (Thanks Patrick Jeeves)
 </ul>
 <li>Add-ons &amp; Samples
 <ul>
 <li>Improved error message when array cannot be instantiated due to subtype not having any default constructor (Thanks Patrick Jeeves)
 <li>Operations with strings and primitives can now be easily disabled by compiling the add-on with AS_NO_IMPL_OPS_WITH_STRING_AND_PRIMITIVE=1 (Thanks Solokiller)
 <li>ScriptBuilder no longer accepts #include directives with non-terminated strings for the filename
+<li>The serializer add-on is now capable of restoring objects only referenced from handles (Thanks Varrok)
+<li>Fixed compiler warnings on deprecated sprintf in scriptarray and scriptstdstring with xcode (Thanks ramcdona)
 </ul>
 <li>Project
 <ul>

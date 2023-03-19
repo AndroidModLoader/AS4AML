@@ -85,6 +85,112 @@ bool Test()
 	asIScriptContext *ctx;
 	CBufferedOutStream bout;
 
+	// Test dynamically compiling new functions containing lambda's multiple times
+	// Reported by gmp3 labs
+	{
+		engine = asCreateScriptEngine();
+		bout.buffer = "";
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+
+		RegisterScriptArray(engine, false);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("blah", "array<int> myArray;");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		const char* script =
+			"void myDynamicallyCompiledFunction()\n"
+			"{\n"
+			"	myArray.sort(function(a, b) { return a < b; }); \n"
+			"}\n";
+
+		r = mod->CompileFunction("test", script, 0, asCOMP_ADD_TO_MODULE, 0);
+		if (r < 0)
+			TEST_FAILED;
+		mod->RemoveFunction(mod->GetFunctionByName("myDynamicallyCompiledFunction"));
+
+		// Since the dynamically function was removed it must now be possible to build it again without changing any code
+		r = mod->CompileFunction("test", script, 0, asCOMP_ADD_TO_MODULE, 0);
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test anonymous functions (lambda) with nameless parameter
+	// Reported by Patrick Jeeves
+	{
+		engine = asCreateScriptEngine();
+		bout.buffer = "";
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"funcdef void f(int,int); \n"
+			"void func() {\n"
+			"  f@ f1 = function(int arg1, int ) {}; \n" // omitting the name of the arg should work
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test anonymous functions (lambda) with complex types in parameters
+	// Reported by Patrick Jeeves
+	{
+		engine = asCreateScriptEngine();
+		bout.buffer = "";
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"namespace UI { enum MouseEvent {} }\n"
+			"namespace GUI {\n"
+			"  interface CallbackContext {} \n"
+			"  funcdef void boolMouseEventCallback(CallbackContext@,const UI::MouseEvent &in);\n"
+			"  void OnMouseButton(boolMouseEventCallback @) {}\n"
+			"}\n"
+			"void func() {\n"
+			"  GUI::OnMouseButton( function(GUI::CallbackContext@ ctx, const UI::MouseEvent &in event) { /*etc */} ); \n"
+			"  GUI::OnMouseButton( function(GUI::CallbackContext@ ctx, UI::MouseEvent &in event) { /*etc */} ); \n"
+			"  GUI::OnMouseButton( function(GUI::CallbackContext@ ctx, UI::MouseEvent event) { /*etc */} ); \n"
+			"} \n");
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer != 
+			"test (7, 1) : Info    : Compiling void func()\n"
+			"test (9, 3) : Error   : No matching signatures to 'GUI::OnMouseButton($func@const)'\n" // TODO: Show the signature of the lambda function in the error message
+			"test (9, 3) : Info    : Candidates are:\n"
+			"test (9, 3) : Info    : void OnMouseButton(boolMouseEventCallback@)\n"
+			"test (10, 3) : Error   : No matching signatures to 'GUI::OnMouseButton($func@const)'\n" // TODO: Show the signature of the lambda function in the error message
+			"test (10, 3) : Info    : Candidates are:\n"
+			"test (10, 3) : Info    : void OnMouseButton(boolMouseEventCallback@)\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
 	// Test compiling funcdefs within a namespace with same name as function in global scope
 	// https://www.gamedev.net/forums/topic/713472-crash-at-building-new-module-after-existing-one/5453276/
 	{
@@ -116,6 +222,12 @@ bool Test()
 			TEST_FAILED;
 
 		func->Release();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
 
 		engine->ShutDownAndRelease();
 	}
@@ -1323,7 +1435,7 @@ bool Test()
 			TEST_FAILED;
 		if (bout.buffer != "glob (1, 1) : Error   : Identifier 'NotDeclared' is not a data type in global namespace\n"
 						   "glob (1, 14) : Info    : Compiling int nd\n"
-						   "glob (1, 28) : Error   : Can't implicitly convert from '$func@const' to 'int&'.\n")
+						   "glob (1, 31) : Error   : Can't implicitly convert from '$func@const' to 'int&'.\n")
 		{
 			PRINTF("%s", bout.buffer.c_str());
 			TEST_FAILED;
@@ -1374,7 +1486,7 @@ bool Test()
 		// TODO: The error messages should be more more explicit
 		if( bout.buffer != "name (2, 1) : Info    : Compiling void func()\n"
 						   "name (3, 23) : Error   : Can't implicitly convert from '$func@const' to 'CB1@&'.\n"
-						   "name (4, 21) : Error   : Can't implicitly convert from '$func@const' to 'CB1@&'.\n"
+						   "name (4, 26) : Error   : Can't implicitly convert from '$func@const' to 'CB1@&'.\n"
 						   "name (5, 15) : Error   : No matching signatures to '$func::opCall()'\n" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
@@ -2064,9 +2176,10 @@ bool Test()
 		if( r >= 0 )
 			TEST_FAILED;
 
-		// TODO: Error message should be better, so it is understood that the error is because of const object
 		if( bout.buffer != "test (5, 1) : Info    : Compiling void main()\n"
-		                   "test (7, 9) : Error   : No matching signatures to 'void F()'\n" )
+		                   "test (7, 9) : Error   : Can't create delegate\n"
+						   "test (7, 9) : Info    : No matching signatures to 'void F()'\n"
+			               "test (7, 9) : Info    : Potentially matching non-const method is hidden on read-only object reference\n" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
 			TEST_FAILED;

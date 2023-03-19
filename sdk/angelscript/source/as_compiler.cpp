@@ -1,6 +1,6 @@
 /*
    AngelCode Scripting Library
-   Copyright (c) 2003-2022 Andreas Jonsson
+   Copyright (c) 2003-2023 Andreas Jonsson
 
    This software is provided 'as-is', without any express or implied
    warranty. In no event will the authors be held liable for any
@@ -2990,14 +2990,10 @@ bool asCCompiler::CompileInitialization(asCScriptNode *node, asCByteCode *bc, co
 			// Cleanup
 			for( asUINT n = 0; n < args.GetLength(); n++ )
 				if( args[n] )
-				{
 					asDELETE(args[n], asCExprContext);
-				}
 			for( asUINT n = 0; n < namedArgs.GetLength(); n++ )
 				if( namedArgs[n].ctx )
-				{
 					asDELETE(namedArgs[n].ctx, asCExprContext);
-				}
 		}
 	}
 	else if( node && node->nodeType == snInitList )
@@ -4532,6 +4528,7 @@ void asCCompiler::CompileIfStatement(asCScriptNode *inode, bool *hasReturn, asCB
 void asCCompiler::CompileForStatement(asCScriptNode *fnode, asCByteCode *bc)
 {
 	// Add a variable scope that will be used by CompileBreak/Continue to know where to stop deallocating variables
+	bc->Block(true);
 	AddVariableScope(true, true);
 
 	// We will use three labels for the for loop
@@ -4656,6 +4653,7 @@ void asCCompiler::CompileForStatement(asCScriptNode *fnode, asCByteCode *bc)
 	}
 
 	RemoveVariableScope();
+	bc->Block(false);
 }
 
 void asCCompiler::CompileWhileStatement(asCScriptNode *wnode, asCByteCode *bc)
@@ -6523,23 +6521,26 @@ asUINT asCCompiler::ImplicitConvLambdaToFunc(asCExprContext *ctx, const asCDataT
 	asCScriptNode *argNode = ctx->exprNode->firstChild;
 	while( argNode->nodeType != snStatementBlock )
 	{
-		// Check if the specified parameter types match the funcdef
-		if (argNode->nodeType == snDataType)
+		// There will be one node for each parameter. There will be 0, 1, or 2 children in the node with datatype and/or name
+		if (argNode->nodeType == snUndefined)
 		{
-			asCDataType dt = builder->CreateDataTypeFromNode(argNode, script, outFunc->nameSpace, false, outFunc->objectType);
-			asETypeModifiers inOutFlag;
-			dt = builder->ModifyDataTypeFromNode(dt, argNode->next, script, &inOutFlag, 0);
+			asCScriptNode* typeNode = argNode->firstChild;
 
-			if (count >= funcDef->parameterTypes.GetLength() ||
-				funcDef->parameterTypes[count] != dt ||
-				funcDef->inOutFlags[count] != inOutFlag)
-				return asCC_NO_CONV;
+			// Check if the specified parameter types match the funcdef
+			if (typeNode->nodeType == snDataType)
+			{
+				asCDataType dt = builder->CreateDataTypeFromNode(typeNode, script, outFunc->nameSpace, false, outFunc->objectType);
+				asETypeModifiers inOutFlag;
+				dt = builder->ModifyDataTypeFromNode(dt, typeNode->next, script, &inOutFlag, 0);
 
-			argNode = argNode->next;
-		}
+				if (count >= funcDef->parameterTypes.GetLength() ||
+					funcDef->parameterTypes[count] != dt ||
+					funcDef->inOutFlags[count] != inOutFlag)
+					return asCC_NO_CONV;
+			}
 
-		if( argNode->nodeType == snIdentifier )
 			count++;
+		}
 		argNode = argNode->next;
 	}
 
@@ -6555,10 +6556,19 @@ asUINT asCCompiler::ImplicitConvLambdaToFunc(asCExprContext *ctx, const asCDataT
 	{
 		// Build a unique name for the anonymous function
 		asCString name;
-		if( m_globalVar )
-			name.Format("$%s$%d", m_globalVar->name.AddressOf(), numLambdas++);
-		else
-			name.Format("$%s$%d", outFunc->GetDeclaration(), numLambdas++);
+		for (int iterations = 0;; iterations++)
+		{
+			name.Format(iterations == 0 ? "$%s$%d" : "$%s$%d(%d)", m_globalVar ? m_globalVar->name.AddressOf() : outFunc->GetDeclaration(), numLambdas, iterations);
+
+			// Check if a function with the same name already exists (this can happen if the function 
+			// that declares the lambda has been removed and then is compiled again with 
+			// asIScriptModule::CompileFunction)
+			asCArray<int> funcs;
+			builder->GetFunctionDescriptions(name.AddressOf(), funcs, outFunc->nameSpace);
+			if (funcs.GetLength() == 0)
+				break;
+		}
+		numLambdas++;
 
 		// Register the lambda with the builder for later compilation
 		asCScriptFunction *func = builder->RegisterLambda(ctx->exprNode, script, funcDef, name, outFunc->nameSpace, outFunc->IsShared());
@@ -8601,6 +8611,12 @@ int asCCompiler::DoAssignment(asCExprContext *ctx, asCExprContext *lctx, asCExpr
 			to.MakeHandle(false);
 			ImplicitConversion(lctx, to, lexpr, asIC_IMPLICIT_CONV);
 			lctx->type.isLValue = true; // Handle may not have been an lvalue, but the dereferenced object is
+		}
+
+		if (!lctx->type.isLValue)
+		{
+			Error(TXT_NOT_LVALUE, lexpr);
+			return -1;
 		}
 
 		// Check for overloaded assignment operator
@@ -10896,7 +10912,7 @@ int asCCompiler::CompileConversion(asCScriptNode *node, asCExprContext *ctx)
 	bool conversionOK = false;
 	if( !expr.type.isConstant && expr.type.dataType != asCDataType::CreatePrimitive(ttVoid, false) )
 	{
-		if( !expr.type.dataType.IsObject() )
+		if( !expr.type.dataType.IsObject() && !expr.IsAnonymousInitList() )
 			ConvertToTempVariable(&expr);
 
 		if( to.IsObjectHandle() &&
@@ -10919,7 +10935,10 @@ int asCCompiler::CompileConversion(asCScriptNode *node, asCExprContext *ctx)
 	asCString strTo, strFrom;
 
 	strTo = to.Format(outFunc->nameSpace);
-	strFrom = expr.type.dataType.Format(outFunc->nameSpace);
+	if (expr.IsAnonymousInitList())
+		strFrom = "<anonymous initialization list>";
+	else
+		strFrom = expr.type.dataType.Format(outFunc->nameSpace);
 
 	asCString msg;
 	msg.Format(TXT_NO_CONVERSION_s_TO_s, strFrom.AddressOf(), strTo.AddressOf());
@@ -10979,7 +10998,7 @@ void asCCompiler::AfterFunctionCall(int funcID, asCArray<asCExprContext*> &args,
 	}
 }
 
-void asCCompiler::ProcessDeferredParams(asCExprContext *ctx)
+void asCCompiler::ProcessDeferredParams(asCExprContext *ctx, bool processOnlyOutRef)
 {
 	if( isProcessingDeferredParams ) return;
 
@@ -10988,13 +11007,16 @@ void asCCompiler::ProcessDeferredParams(asCExprContext *ctx)
 	for( asUINT n = 0; n < ctx->deferredParams.GetLength(); n++ )
 	{
 		asSDeferredParam outParam = ctx->deferredParams[n];
-		if( outParam.argInOutFlags < asTM_OUTREF ) // &in, or not reference
+		if( !processOnlyOutRef && outParam.argInOutFlags < asTM_OUTREF ) // &in, or not reference
 		{
 			// Just release the variable
 			ReleaseTemporaryVariable(outParam.argType, &ctx->bc);
+
+			ctx->deferredParams.RemoveIndex(n--);
 		}
 		else if( outParam.argInOutFlags == asTM_OUTREF )
 		{
+			// Assign the value returned in the output reference parameter to the expression passed as argument
 			asCExprContext *expr = outParam.origExpr;
 			outParam.origExpr = 0;
 
@@ -11051,8 +11073,10 @@ void asCCompiler::ProcessDeferredParams(asCExprContext *ctx)
 
 			// Delete the original expression context
 			asDELETE(expr, asCExprContext);
+
+			ctx->deferredParams.RemoveIndex(n--);
 		}
-		else // &inout
+		else if( !processOnlyOutRef ) // &inout
 		{
 			if( outParam.argType.isTemporary )
 				ReleaseTemporaryVariable(outParam.argType, &ctx->bc);
@@ -11067,10 +11091,11 @@ void asCCompiler::ProcessDeferredParams(asCExprContext *ctx)
 					ReleaseTemporaryVariable(outParam.argType, &ctx->bc);
 				}
 			}
+
+			ctx->deferredParams.RemoveIndex(n--);
 		}
 	}
 
-	ctx->deferredParams.SetLength(0);
 	isProcessingDeferredParams = false;
 }
 
@@ -11144,7 +11169,7 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 	if( CompileArgumentList(node->lastChild, args, namedArgs) >= 0 )
 	{
 		// Check for a value cast behaviour
-		if( args.GetLength() == 1 )
+		if( args.GetLength() == 1 && namedArgs.GetLength() == 0 )
 		{
 			asCExprContext conv(engine);
 			conv.Copy(args[0]);
@@ -11203,7 +11228,7 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 			funcs = beh->factories;
 
 		// Special case: Allow calling func(void) with a void expression.
-		if( args.GetLength() == 1 && args[0]->type.dataType == asCDataType::CreatePrimitive(ttVoid, false) )
+		if( args.GetLength() == 1 && args[0]->type.dataType == asCDataType::CreatePrimitive(ttVoid, false) && namedArgs.GetLength() == 0 )
 		{
 			// Evaluate the expression before the function call
 			MergeExprBytecode(ctx, args[0]);
@@ -11213,7 +11238,7 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 
 		// Special case: If this is an object constructor and there are no arguments use the default constructor.
 		// If none has been registered, just allocate the variable and push it on the stack.
-		if( args.GetLength() == 0 )
+		if( args.GetLength() == 0 && namedArgs.GetLength() == 0 )
 		{
 			beh = tempObj.dataType.GetBehaviour();
 			if( beh && beh->construct == 0 && !(dt.GetTypeInfo()->flags & asOBJ_REF) )
@@ -11236,7 +11261,7 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 		}
 
 		// Special case: If this is a construction of a delegate and the expression names an object method
-		if( dt.IsFuncdef() && args.GetLength() == 1 && args[0]->methodName != "" )
+		if( dt.IsFuncdef() && args.GetLength() == 1 && args[0]->methodName != "" && namedArgs.GetLength() == 0 )
 		{
 			// TODO: delegate: It is possible that the argument returns a function pointer already, in which
 			//                 case no object delegate will be created, but instead a delegate for a function pointer
@@ -11257,6 +11282,7 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 				// Filter the available object methods to find the one that matches the func def
 				asCObjectType *type = CastToObjectType(args[0]->type.dataType.GetTypeInfo());
 				asCScriptFunction *bestMethod = 0;
+				bool nonConstMethodHidden = false;
 				for( asUINT n = 0; n < type->methods.GetLength(); n++ )
 				{
 					asCScriptFunction *func = engine->scriptFunctions[type->methods[n]];
@@ -11265,8 +11291,11 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 						continue;
 
 					// If the expression is for a const object, then only const methods should be accepted
-					if( args[0]->type.dataType.IsReadOnly() && !func->IsReadOnly() )
+					if (args[0]->type.dataType.IsReadOnly() && !func->IsReadOnly())
+					{
+						nonConstMethodHidden = true;
 						continue;
+					}
 
 					if( func->IsSignatureExceptNameAndObjectTypeEqual(CastToFuncdefType(dt.GetTypeInfo())->funcdef) )
 					{
@@ -11306,9 +11335,15 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 				}
 				else
 				{
+					Error(TXT_CANNOT_CREATE_DELEGATE, node);
+
 					asCString msg;
 					msg.Format(TXT_NO_MATCHING_SIGNATURES_TO_s, CastToFuncdefType(dt.GetTypeInfo())->funcdef->GetDeclaration());
-					Error(msg.AddressOf(), node);
+					Information(msg.AddressOf(), node);
+
+					if (nonConstMethodHidden)
+						Information(TXT_POTENTIAL_MATCHING_NON_CONST_METHOD_HIDDEN, node);
+
 					error = true;
 				}
 			}
@@ -11393,14 +11428,10 @@ int asCCompiler::CompileConstructCall(asCScriptNode *node, asCExprContext *ctx)
 	// Cleanup
 	for( asUINT n = 0; n < args.GetLength(); n++ )
 		if( args[n] )
-		{
 			asDELETE(args[n], asCExprContext);
-		}
 	for( asUINT n = 0; n < namedArgs.GetLength(); n++ )
 		if( namedArgs[n].ctx )
-		{
 			asDELETE(namedArgs[n].ctx, asCExprContext);
-		}
 
 	return error ? -1 : 0;
 }
@@ -11612,7 +11643,7 @@ int asCCompiler::CompileFunctionCall(asCScriptNode *node, asCExprContext *ctx, a
 	if( CompileArgumentList(node->lastChild, args, namedArgs) >= 0 )
 	{
 		// Special case: Allow calling func(void) with an expression that evaluates to no datatype, but isn't exactly 'void'
-		if( args.GetLength() == 1 && args[0]->type.IsVoid() && !args[0]->IsVoidExpression() )
+		if( args.GetLength() == 1 && args[0]->type.IsVoid() && !args[0]->IsVoidExpression() && namedArgs.GetLength() == 0 )
 		{
 			// Evaluate the expression before the function call
 			MergeExprBytecode(ctx, args[0]);
@@ -11695,14 +11726,10 @@ int asCCompiler::CompileFunctionCall(asCScriptNode *node, asCExprContext *ctx, a
 	// Cleanup
 	for( asUINT n = 0; n < args.GetLength(); n++ )
 		if( args[n] )
-		{
 			asDELETE(args[n], asCExprContext);
-		}
 	for( asUINT n = 0; n < namedArgs.GetLength(); n++ )
 		if( namedArgs[n].ctx )
-		{
 			asDELETE(namedArgs[n].ctx, asCExprContext);
-		}
 
 	if( initializeMembers )
 	{
@@ -12696,8 +12723,7 @@ int asCCompiler::ProcessPropertyGetSetAccessor(asCExprContext *ctx, asCExprConte
 	if( before.type.stackOffset )
 		ReleaseTemporaryVariable(before.type.stackOffset, &ctx->bc);
 
-	asASSERT( ctx->deferredParams.GetLength() == 0 );
-	ctx->deferredParams = before.deferredParams;
+	MergeExprBytecode(ctx, &before);
 	ProcessDeferredParams(ctx);
 
 	return 0;
@@ -13167,6 +13193,13 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
 		asASSERT( node->firstChild->nodeType == snArgList );
 		if( CompileArgumentList(node->firstChild, args, namedArgs) >= 0 )
 		{
+			// TODO: Add support for named args on index operator too
+			if (namedArgs.GetLength() > 0)
+			{
+				Error(TXT_INVALID_USE_OF_NAMED_ARGS, node);
+				isOK = false;
+			}
+
 			// Check for the existence of the opIndex method
 			bool lookForProperty = true;
 			if( propertyName == "" )
@@ -13237,9 +13270,10 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
 		// Cleanup
 		for( asUINT n = 0; n < args.GetLength(); n++ )
 			if( args[n] )
-			{
 				asDELETE(args[n], asCExprContext);
-			}
+		for (asUINT n = 0; n < namedArgs.GetLength(); n++)
+			if (namedArgs[n].ctx)
+				asDELETE(namedArgs[n].ctx, asCExprContext);
 
 		if( !isOK )
 			return -1;
@@ -13319,14 +13353,10 @@ int asCCompiler::CompileExpressionPostOp(asCScriptNode *node, asCExprContext *ct
 		// Cleanup
 		for( asUINT n = 0; n < args.GetLength(); n++ )
 			if( args[n] )
-			{
 				asDELETE(args[n], asCExprContext);
-			}
 		for( asUINT n = 0; n < namedArgs.GetLength(); n++ )
 			if( namedArgs[n].ctx )
-			{
 				asDELETE(namedArgs[n].ctx, asCExprContext);
-			}
 			
 		if( !isOK )
 			return -1;
@@ -14855,6 +14885,10 @@ void asCCompiler::CompileBitwiseOperator(asCScriptNode *node, asCExprContext *lc
 			asCString str;
 			str.Format(TXT_NO_CONVERSION_s_TO_s, lctx->type.dataType.Format(outFunc->nameSpace).AddressOf(), to.Format(outFunc->nameSpace).AddressOf());
 			Error(str, node);
+
+			// Set an integer value and allow the compiler to continue
+			ctx->type.SetConstantDW(asCDataType::CreatePrimitive(ttInt, true), 0);
+			return;
 		}
 
 		// Convert right hand operand to same size as left hand
@@ -14871,6 +14905,10 @@ void asCCompiler::CompileBitwiseOperator(asCScriptNode *node, asCExprContext *lc
 			asCString str;
 			str.Format(TXT_NO_CONVERSION_s_TO_s, rctx->type.dataType.Format(outFunc->nameSpace).AddressOf(), lctx->type.dataType.Format(outFunc->nameSpace).AddressOf());
 			Error(str, node);
+
+			// Set an integer value and allow the compiler to continue
+			ctx->type.SetConstantDW(asCDataType::CreatePrimitive(ttInt, true), 0);
+			return;
 		}
 
 		bool isConstant = lctx->type.isConstant && rctx->type.isConstant;
@@ -14999,6 +15037,10 @@ void asCCompiler::CompileBitwiseOperator(asCScriptNode *node, asCExprContext *lc
 			asCString str;
 			str.Format(TXT_NO_CONVERSION_s_TO_s, lctx->type.dataType.Format(outFunc->nameSpace).AddressOf(), to.Format(outFunc->nameSpace).AddressOf());
 			Error(str, node);
+
+			// Set an integer value and allow the compiler to continue
+			ctx->type.SetConstantDW(asCDataType::CreatePrimitive(ttInt, true), 0);
+			return;
 		}
 
 		// Right operand must be 32bit uint
@@ -15011,6 +15053,10 @@ void asCCompiler::CompileBitwiseOperator(asCScriptNode *node, asCExprContext *lc
 			asCString str;
 			str.Format(TXT_NO_CONVERSION_s_TO_s, rctx->type.dataType.Format(outFunc->nameSpace).AddressOf(), "uint");
 			Error(str, node);
+
+			// Set an integer value and allow the compiler to continue
+			ctx->type.SetConstantDW(asCDataType::CreatePrimitive(ttInt, true), 0);
+			return;
 		}
 
 		bool isConstant = lctx->type.isConstant && rctx->type.isConstant;
@@ -16183,8 +16229,9 @@ void asCCompiler::PerformFunctionCall(int funcId, asCExprContext *ctx, bool isCo
 		if( args )
 			AfterFunctionCall(funcId, *args, ctx, engine->ep.allowUnsafeReferences ? true : false);
 
-		if( !engine->ep.allowUnsafeReferences )
-			ProcessDeferredParams(ctx);
+		// If unsafe references is enabled we only process the &out parameters after the function call, 
+		// so that other deferred parameters (destruction of temporaries) can be left to the end of the statement
+		ProcessDeferredParams(ctx, engine->ep.allowUnsafeReferences);
 	}
 }
 
