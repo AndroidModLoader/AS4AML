@@ -35,6 +35,9 @@ jobs:
     - name: Build the code...
       run: ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application.mk NDK_DEBUG=0 -j12
 
+    - name: Build 64-bit the code...
+      run: ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application64.mk NDK_DEBUG=0 -j12
+      
     - name: Upload the mod!
       uses: actions/upload-artifact@v3
       with:
