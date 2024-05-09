@@ -2,7 +2,11 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 LOCAL_CPP_EXTENSION := .cpp .cc
-LOCAL_MODULE    := AS4AML
+ifeq ($(TARGET_ARCH_ABI), armeabi-v7a)
+	LOCAL_MODULE := AS4AML
+else
+	LOCAL_MODULE := AS4AML.64
+endif
 LOCAL_SRC_FILES := main.cpp as4aml.cpp amlscriptbuilder.cpp mod/logger.cpp mod/config.cpp
 FILE_LIST += $(wildcard $(LOCAL_PATH)/sdk/angelscript/source/*.cpp)
 FILE_LIST += $(wildcard $(LOCAL_PATH)/sdk/angelscript/source/*.S)
