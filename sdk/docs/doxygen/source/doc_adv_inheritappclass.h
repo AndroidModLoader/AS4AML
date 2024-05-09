@@ -13,6 +13,8 @@ the script side that the scripts can see and inherit from.
 
 The following is an example implementation of such a proxy class.
 
+\todo Add code in CallMe to detect when the call is coming from the script, so the call is not routed back to the script again in a recursive loop
+
 \code
 // On the C++ side
 class FooScripted
@@ -154,7 +156,7 @@ all the modules that should be able to derive from the FooScripted class.
     {
       // Create a new C++ instance and copy content
       \@m_obj = FooScripted_t();
-      m_obj = o.m_obj; \n"
+      m_obj = o.m_obj;
     }
 
     // Do a deep a copy of the C++ object

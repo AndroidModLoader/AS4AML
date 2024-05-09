@@ -180,6 +180,108 @@ bool Test()
 	COutStream out;
 	asIScriptModule *mod;
 
+	// Test array of handles with default syntax
+	// https://www.gamedev.net/forums/topic/715669-4-assertion-errors-with-nested-lists-of-handles/
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterScriptArray(engine, true);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"class Cache { \n"
+			"	protected Obj@[]@[] _Blah; \n"
+			"	protected void AddObj(Obj@ o) { \n"
+			"		_Blah.insertLast({}); \n"
+			"	} \n"
+			"} \n"
+			"class Obj { \n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test issue warning in ternary condition as func arg
+	// https://www.gamedev.net/forums/topic/715023-asserion-failure-compiling-a-weird-ternery-statement/5459701/
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterStdString(engine);
+		RegisterScriptArray(engine, true);
+		engine->RegisterGlobalFunction("void print(const string &in)", asFUNCTION(0), asCALL_GENERIC);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"namespace Math { \n"
+			"  int Clamp(int, int, int) { return 0; } \n"
+			"  float Clamp(float, float, float) { return 0; } \n"
+			"} \n"
+			"void main() { \n"
+			"  int m_NewGhostOffset = 0; \n"
+			"  uint lastLoadedGhostRaceTime = 0; \n"
+			"  m_NewGhostOffset = Math::Clamp(m_NewGhostOffset, 0, lastLoadedGhostRaceTime == 0 ? 9999999 : lastLoadedGhostRaceTime * 2.); \n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "test (5, 1) : Info    : Compiling void main()\n"
+						   "test (8, 55) : Warning : Float value truncated in implicit conversion to integer\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test invalid expression
+	// https://www.gamedev.net/forums/topic/715025-assertion-failure-when-missing-parens-while-assigning-a-handle-in-a-loop-condition/5459702/
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterStdString(engine);
+		RegisterScriptArray(engine, true);
+		engine->RegisterGlobalFunction("void print(const string &in)", asFUNCTION(0), asCALL_GENERIC);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void main()\n"
+			"{\n"
+			"	string[]@ arr; \n"
+			"	while (false && (@arr = cast<array<string>>(null) !is null)) {\n"
+			"		break; \n"
+			"	} \n"
+			"}\n");
+		r = mod->Build(); // unrecoverable error, compiler shouldn't attempt to continue the compilation of the expression
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "test (1, 1) : Info    : Compiling void main()\n"
+			               "test (4, 26) : Error   : Can't implicitly convert from 'const bool' to 'string[]@'.\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
 	// Test that expression with non lvalue used in assign op gives error
 	{
 		engine = asCreateScriptEngine();
@@ -1637,7 +1739,8 @@ bool Test()
 		engine->Release();
 	}
 
-	// Test the logic for JIT compilation
+	// Test a problem with jit and copy constructor for class containing a non-copyable member
+	// https://www.gamedev.net/forums/topic/716517-new-generated-constructor-amp-jit-issue/
 	{
 		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
 		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
@@ -1647,20 +1750,94 @@ bool Test()
 		{
 		public:
 			JitCompiler() : invokeCount(0) {}
-			virtual int  CompileFunction(asIScriptFunction* /*function*/, asJITFunction* /*output*/) { invokeCount++; return 0; }
-			virtual void ReleaseJITFunction(asJITFunction /*func*/) { }
+			virtual int  CompileFunction(asIScriptFunction* /*function*/, asJITFunction* output) {
+				invokeCount++;
+				*reinterpret_cast<int**>(output) = new int[1];
+				return 0;
+			}
+			virtual void ReleaseJITFunction(asJITFunction func) {
+				delete reinterpret_cast<int*>(func);
+			}
 			int invokeCount;
 		} jit;
 
+		engine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, true);
+		engine->SetJITCompiler(&jit);
+
+		engine->SetEngineProperty(asEP_INIT_GLOBAL_VARS_AFTER_BUILD, false);
+
+		engine->RegisterObjectType("file", 0, asOBJ_REF);
+		engine->RegisterObjectBehaviour("file", asBEHAVE_FACTORY, "file @f()", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterObjectBehaviour("file", asBEHAVE_ADDREF, "void f()", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterObjectBehaviour("file", asBEHAVE_RELEASE, "void f()", asFUNCTION(0), asCALL_GENERIC);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test", 
+			"class WarningIssue \n"
+			"{ \n"
+			"	file    f; \n" // removing the file field fixes the problem
+			"	int i = 0; \n"
+			"}; \n"
+			"WarningIssue  issue; \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		if (jit.invokeCount != 2)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test the logic for JIT compilation (version 2)
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		class JitCompiler : public asIJITCompilerV2
+		{
+		public:
+			JitCompiler() : invokeCount(0), compileCount(0) {}
+			virtual void NewFunction(asIScriptFunction* /*function*/) {
+				invokeCount++;
+			}
+			virtual void CleanFunction(asIScriptFunction * /*scriptFunc*/, asJITFunction func) {
+				delete reinterpret_cast<int*>(func);
+			}
+			void Compile(asIScriptEngine* engine)
+			{
+				for (int n = 0; n <= engine->GetLastFunctionId(); n++)
+				{
+					asIScriptFunction* scriptFunc = engine->GetFunctionById(n);
+					if (scriptFunc && scriptFunc->GetFuncType() == asFUNC_SCRIPT)
+					{
+						scriptFunc->SetJITFunction(reinterpret_cast<asJITFunction>(new int[1]));
+						compileCount++;
+					}
+				}
+			}
+			int invokeCount;
+			int compileCount;
+		} jit;
+
+		engine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, true);
+		engine->SetEngineProperty(asEP_JIT_INTERFACE_VERSION, 2);
 		engine->SetJITCompiler(&jit);
 
 		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
 		mod->AddScriptSection("test", "void func() {}");
 		r = mod->Build();
-		if( r < 0 )
+		if (r < 0)
 			TEST_FAILED;
 
-		if( bout.buffer != " (0, 0) : Warning : Function 'void func()' appears to have been compiled without JIT entry points\n" )
+		if (bout.buffer != "")
 		{
 			PRINTF("%s", bout.buffer.c_str());
 			TEST_FAILED;
@@ -1673,7 +1850,57 @@ bool Test()
 		if (jit.invokeCount != 2)
 			TEST_FAILED;
 
-		engine->Release();
+		jit.Compile(engine);
+		if (jit.invokeCount != jit.compileCount)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test the logic for JIT compilation (version 1)
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		class JitCompiler : public asIJITCompiler
+		{
+		public:
+			JitCompiler() : invokeCount(0) {}
+			virtual int  CompileFunction(asIScriptFunction* /*function*/, asJITFunction* output) { 
+				invokeCount++; 
+				*reinterpret_cast<int**>(output) = new int[1]; 
+				return 0;
+			}
+			virtual void ReleaseJITFunction(asJITFunction func) { 
+				delete reinterpret_cast<int*>(func); 
+			}
+			int invokeCount;
+		} jit;
+
+		engine->SetEngineProperty(asEP_INCLUDE_JIT_INSTRUCTIONS, true);
+		engine->SetJITCompiler(&jit);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test", "void func() {}");
+		r = mod->Build();
+		if( r < 0 )
+			TEST_FAILED;
+
+		if( bout.buffer != "" )
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		r = mod->CompileFunction("test2", "void func2() {}", 0, asCOMP_ADD_TO_MODULE, 0);
+		if (r < 0)
+			TEST_FAILED;
+
+		if (jit.invokeCount != 2)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
 	}
 
 	// Test string with implicit cast to primitive and dictionary

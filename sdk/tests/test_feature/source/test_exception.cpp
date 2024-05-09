@@ -15,7 +15,7 @@ static void print(asIScriptGeneric *gen)
 class ExceptionHandler
 {
 public:
-	ExceptionHandler() : ok(false) {}
+	ExceptionHandler() : ok(false), firstStackPointer(0xFFFFFFFF) {}
 
 	void Callback(asIScriptContext *ctx)
 	{
@@ -25,9 +25,18 @@ public:
 		// Type of exception is what was expected?
 		if( string(ctx->GetExceptionString()) != "Null pointer access" )
 			ok = false;
+
+		// Check that the stack pointer is on the same location for every iteration
+		asDWORD stackPointer = 0;
+		ctx->GetCallStateRegisters(0, 0, 0, 0, &stackPointer, 0);
+		if (firstStackPointer == 0xFFFFFFFF)
+			firstStackPointer = stackPointer;
+		else if (firstStackPointer != stackPointer)
+			ok = false;
 	}
 
 	bool ok;
+	asDWORD firstStackPointer;
 };
 
 void TranslateException(asIScriptContext *ctx, void * /*param*/)
@@ -55,7 +64,7 @@ void ThrowException()
 class foo
 {
 	public:
-	int *opIndex_ThrowException(int) { throw std::exception(); return 0; }
+	int *opIndex_ThrowException(int) { throw std::exception(); }
 };
 
 class Dummy
@@ -69,12 +78,122 @@ public:
 	static Dummy *Factory() { asGetActiveContext()->SetException("...", true); return new Dummy(); }
 };
 
+class ClassValue
+{
+public:
+	ClassValue() {}
+	~ClassValue() {}
+
+	void exception()
+	{
+		asGetActiveContext()->SetException("Crash.");
+	}
+};
+
+void Constructor(void* mem)
+{
+	new(mem) ClassValue();
+}
+
+void Destructor(void* mem)
+{
+	((ClassValue*)mem)->~ClassValue();
+}
+
 bool Test()
 {
 	bool fail = false;
 	int r;
 	COutStream out;
 	CBufferedOutStream bout;
+
+	// Test crash due to exception, with object variable declared just after the end of a block. 
+	// The asIScriptContext::IsVarInScope didn't work properly, leading to the crash in the DetermineLiveObjects
+	// https://www.gamedev.net/forums/topic/715075-context-crash-during-exception-handling-in-determineliveobjects/
+	{
+		asIScriptEngine* engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+
+		engine->RegisterObjectType("ClassValue", sizeof(ClassValue),
+			asOBJ_VALUE | asOBJ_APP_CLASS_CD);
+		engine->SetEngineProperty(asEP_BUILD_WITHOUT_LINE_CUES, true);
+
+		engine->RegisterObjectBehaviour("ClassValue", asBEHAVE_CONSTRUCT,
+			"void f()", asFUNCTION(Constructor), asCALL_CDECL_OBJLAST);
+		engine->RegisterObjectBehaviour("ClassValue", asBEHAVE_DESTRUCT,
+			"void f()", asFUNCTION(Destructor), asCALL_CDECL_OBJLAST);
+		engine->RegisterObjectMethod("ClassValue", "void exception()",
+			asMETHOD(ClassValue, exception), asCALL_THISCALL);
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			R"(
+            void main() {
+                if (true)
+                {
+                    int dummy = 1;
+                }
+                ClassValue a;
+                a.exception();
+            }
+            )");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		asIScriptContext* ctx = engine->CreateContext();
+		ctx->Prepare(mod->GetFunctionByName("main"));
+		r = ctx->Execute();
+		if (r != asEXECUTION_EXCEPTION)
+			TEST_FAILED;
+		ctx->Release();
+		engine->ShutDownAndRelease();
+	}
+
+	// Test crash due to exception
+	// https://www.gamedev.net/forums/topic/714882-crash-in-trycatch-blocks/5458952/
+	// https://github.com/openplanet-nl/issues/issues/359
+	{
+		asIScriptEngine* engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"class Foo { void Bar() {} }\n"
+			"void Main() {\n"
+			"	Foo@ f;\n"
+			"	for (int i = 0; i < 5; i++) {\n"
+			"		try {\n"
+			"			f.Bar();\n"
+			"		}\n"
+			"		catch {}\n"
+			"	}\n"
+			"}\n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		asIScriptContext* ctx = engine->CreateContext();
+		ExceptionHandler handler;
+		ctx->SetExceptionCallback(asMETHOD(ExceptionHandler, Callback), &handler, asCALL_THISCALL);
+		ctx->Prepare(mod->GetFunctionByDecl("void Main()"));
+		r = ctx->Execute();
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (!handler.ok)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		ctx->Release();
+
+		engine->ShutDownAndRelease();
+	}
 
 	// Test script exception in registered factory function
 	// https://www.gamedev.net/forums/topic/704577-throwing-script-exception-from-factory-function/

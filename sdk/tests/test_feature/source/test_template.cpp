@@ -196,6 +196,34 @@ public:
 
 bool TestScriptType();
 
+class C
+{
+public:
+	static C* factory(asITypeInfo* /*objType*/)
+	{
+		return new C;
+	}
+	void addRef()
+	{
+		asAtomicInc(refCount_);
+	}
+	void release()
+	{
+		if (asAtomicDec(refCount_) == 0) delete this;
+	}
+
+	CScriptArray* f1() const
+	{
+		return nullptr;
+	}
+
+	int refCount_;
+};
+
+void f2(const C*)
+{
+}
+
 bool Test()
 {
 	RET_ON_MAX_PORT
@@ -204,6 +232,90 @@ bool Test()
 	int r;
 	COutStream out;
 	CBufferedOutStream bout;
+
+	// Template specialization with multiple subtypes
+	// Reported by Stefan Blumer
+	{
+		asIScriptEngine* engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		// register template with child funcdef
+		engine->RegisterObjectType("MyTmpl<class S, class T>", 0, asOBJ_REF | asOBJ_TEMPLATE);
+		engine->RegisterObjectBehaviour("MyTmpl<S,T>", asBEHAVE_FACTORY, "MyTmpl<S,T> @f(int&in)", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterObjectBehaviour("MyTmpl<S,T>", asBEHAVE_ADDREF, "void f()", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterObjectBehaviour("MyTmpl<S,T>", asBEHAVE_RELEASE, "void f()", asFUNCTION(0), asCALL_GENERIC);
+
+		// register template specialization
+		r = engine->RegisterObjectType("MyTmpl<int,float>", 0, asOBJ_REF);
+		if (r < 0)
+			TEST_FAILED;
+		r = engine->RegisterObjectBehaviour("MyTmpl<int,float>", asBEHAVE_FACTORY, "MyTmpl<int,float> @f(int&in)", asFUNCTION(0), asCALL_GENERIC);
+		if (r < 0)
+			TEST_FAILED;
+		r = engine->RegisterObjectBehaviour("MyTmpl<int,float>", asBEHAVE_ADDREF, "void f()", asFUNCTION(0), asCALL_GENERIC);
+		if (r < 0)
+			TEST_FAILED;
+		r = engine->RegisterObjectBehaviour("MyTmpl<int,float>", asBEHAVE_RELEASE, "void f()", asFUNCTION(0), asCALL_GENERIC);
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		asITypeInfo *type = engine->GetTypeInfoByDecl("MyTmpl<int,float>");
+		if (type->GetSubTypeId(0) != asTYPEID_INT32 || type->GetSubTypeId(1) != asTYPEID_FLOAT)
+			TEST_FAILED;
+
+		engine->Release();
+	}
+
+	// Test template returning another template
+	// Reported by Polyak Istvan
+	{
+		asIScriptEngine* engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterStdString(engine);
+		RegisterScriptArray(engine, true);
+
+		r = engine->RegisterObjectType("C<class T1>", 0, asOBJ_REF | asOBJ_TEMPLATE);
+		r = engine->RegisterObjectBehaviour("C<T1>",asBEHAVE_FACTORY,"C<T1> @ f (int &in)",asFUNCTIONPR(C::factory, (asITypeInfo*), C*),asCALL_CDECL);
+		r = engine->RegisterObjectBehaviour("C<T1>",asBEHAVE_ADDREF,"void f ()",asMETHODPR(C, addRef, (), void),asCALL_THISCALL);
+		r = engine->RegisterObjectBehaviour("C<T1>",asBEHAVE_RELEASE,"void f ()",asMETHODPR(C, release, (), void),asCALL_THISCALL);
+		r = engine->RegisterObjectMethod("C<T1>","array<T1> @ f1 () const",asMETHODPR(C, f1, () const, CScriptArray*),asCALL_THISCALL); // TODO: array<T1> shouldn't be in templateInstanceType as it is a nonsense instance 
+		r = engine->RegisterGlobalFunction("const C<int> @ f2 ()",asFUNCTIONPR(f2, (const C*), void),asCALL_CDECL);
+
+		for (int i = 0; i < 2; i++)
+		{
+			asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+			mod->AddScriptSection("test",
+				"void f11(void)\n"
+				"{ \n"
+				"  C<int> c1; \n"
+				"  const array<int> @ t = c1.f1(); \n"
+				"}\n");
+			r = mod->Build();
+							  
+			if (r < 0)
+				TEST_FAILED;
+
+			mod->Discard();
+			engine->GarbageCollect();
+		}
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->Release();
+	}
 
 	// Test array of array when subtype doesn't have default constructor (must give appropriate error)
 	// Reported by Patrick Jeeves
@@ -577,7 +689,7 @@ bool Test()
 		engine->Release();
 	}
 
-	// The sub type must not be const, except if it is a handle to const
+	// It is allowed to declare sub types as const
 	{
 		asIScriptEngine *engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
 		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
@@ -592,15 +704,15 @@ bool Test()
 		mod->AddScriptSection("test",
 			"class A {} \n"
 			"void func() { \n"
-			"  MyTmpl<const A> a; \n" // not allowed
+			"  MyTmpl<const A> a; \n" // allowed
 			"  MyTmpl<const A@> b; \n" // allowed
+			"  MyTmpl<const A@const> c; \n" // allowed
 			"} \n");
 		r = mod->Build();
-		if( r > 0 )
+		if (r < 0)
 			TEST_FAILED;
 
-		if( bout.buffer != "test (2, 1) : Info    : Compiling void func()\n"
-		                   "test (3, 10) : Error   : Template subtype must not be read-only\n" )
+		if( bout.buffer != "" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
 			TEST_FAILED;
@@ -849,10 +961,7 @@ bool Test()
 			TEST_FAILED;
 
 		if( bout.buffer != "test (2, 1) : Info    : Compiling void func()\n"
-					  	   "test (4, 9) : Error   : Template subtype must not be read-only\n"
-						   "test (4, 21) : Error   : Only objects have constructors\n"
-						   "test (6, 4) : Warning : 'i' is not initialized.\n"
-						   "test (6, 4) : Error   : Type 'int' doesn't support the indexing operator\n"
+						   "test (6, 8) : Error   : Reference is read-only\n"
 						   "test (8, 8) : Error   : Reference is read-only\n" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
@@ -1172,7 +1281,7 @@ bool Test()
 		r = mod->Build();
 		if( r >= 0 )
 			TEST_FAILED;
-		if( bout.buffer != "mod (1, 7) : Info    : Compiling T::T()\n"
+		if( bout.buffer != "mod (1, 7) : Info    : Compiling auto generated T::T()\n"
 						   "mod (1, 23) : Error   : No default constructor for object of type 'MyTmpl'.\n"
 						   "mod (2, 26) : Info    : Compiling S::S()\n"
 						   "mod (2, 34) : Error   : No appropriate opAssign method found in 'MyTmpl' for value assignment\n"

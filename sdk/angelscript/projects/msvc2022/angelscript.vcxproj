@@ -418,7 +418,7 @@
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <WarningLevel>Level4</WarningLevel>
-      <Optimization>Full</Optimization>
+      <Optimization>MaxSpeed</Optimization>
       <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
@@ -442,6 +442,7 @@
     <ClCompile Include="..\..\source\as_callfunc_mips.cpp" />
     <ClCompile Include="..\..\source\as_callfunc_ppc.cpp" />
     <ClCompile Include="..\..\source\as_callfunc_ppc_64.cpp" />
+    <ClCompile Include="..\..\source\as_callfunc_riscv64.cpp" />
     <ClCompile Include="..\..\source\as_callfunc_sh4.cpp" />
     <ClCompile Include="..\..\source\as_callfunc_x64_gcc.cpp" />
     <ClCompile Include="..\..\source\as_callfunc_x64_mingw.cpp" />
@@ -535,6 +536,7 @@
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">$(Platform)\$(Configuration)\as_callfunc_arm64_msvc.obj;%(Outputs)</Outputs>
     </CustomBuild>
     <None Include="..\..\source\as_callfunc_arm64_gcc.S" />
+    <None Include="..\..\source\as_callfunc_arm64_xcode.S" />
     <None Include="..\..\source\as_callfunc_arm_gcc.S" />
     <CustomBuild Include="..\..\source\as_callfunc_arm_msvc.asm">
       <FileType>Document</FileType>
@@ -547,6 +549,7 @@
     </CustomBuild>
     <None Include="..\..\source\as_callfunc_arm_vita.S" />
     <None Include="..\..\source\as_callfunc_arm_xcode.S" />
+    <None Include="..\..\source\as_callfunc_riscv64_gcc.S" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

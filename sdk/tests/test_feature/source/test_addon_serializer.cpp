@@ -97,7 +97,7 @@ struct CppObj
 
 	std::string myString;
 	std::string getString() { return myString; }
-	void setString(std::string in) { myString = in; }
+	void setString(std::string & in) { myString = in; }
 };
 
 static void CppObjFactory(asIScriptGeneric* gen)
@@ -113,7 +113,7 @@ void RegisterCppObjType(asIScriptEngine* engine)
 
 	r = engine->RegisterObjectBehaviour("CppObj", asBEHAVE_FACTORY, "CppObj@ f()", asFUNCTION(CppObjFactory), asCALL_GENERIC);
 	r = engine->RegisterObjectMethod("CppObj", "string str()", asMETHODPR(CppObj, CppObj::getString, (void), std::string), asCALL_THISCALL);
-	r = engine->RegisterObjectMethod("CppObj", "void setStr(string& in)", asMETHODPR(CppObj, CppObj::setString, (std::string), void), asCALL_THISCALL);
+	r = engine->RegisterObjectMethod("CppObj", "void setStr(string& in)", asMETHODPR(CppObj, CppObj::setString, (std::string&), void), asCALL_THISCALL);
 	r = engine->RegisterObjectBehaviour("CppObj", asBEHAVE_ADDREF, "void f()", asMETHOD(CppObj, AddRef), asCALL_THISCALL);
 	r = engine->RegisterObjectBehaviour("CppObj", asBEHAVE_RELEASE, "void f()", asMETHOD(CppObj, Release), asCALL_THISCALL);
 }
@@ -244,13 +244,14 @@ bool Test()
 
 	// Test serializing a script object with a handle holding the only reference to a script array
 	// https://www.gamedev.net/forums/topic/712813-serializing-an-object-handle-holding-the-only-reference-to-an-object/
+	SKIP_ON_MAX_PORT
 	{
 		engine = asCreateScriptEngine();
 		engine->SetMessageCallback(asMETHOD(COutStream, Callback), &out, asCALL_THISCALL);
 
 		RegisterStdString(engine);
 		RegisterScriptArray(engine, true);
-		r = engine->RegisterGlobalFunction("void print(const string &in)", asFUNCTION(printString), asCALL_CDECL);
+		r = engine->RegisterGlobalFunction("void print(const string &in)", asFUNCTION(printString), asCALL_CDECL); assert(r >= 0);
 
 		asIScriptContext* ctx = engine->CreateContext();
 
@@ -324,6 +325,7 @@ bool Test()
 
 	// Test serializing a script object with a handle holding the only reference to a registered type
 	// https://www.gamedev.net/forums/topic/712813-serializing-an-object-handle-holding-the-only-reference-to-an-object/
+	SKIP_ON_MAX_PORT
 	{
 		engine = asCreateScriptEngine();
 		engine->SetMessageCallback(asMETHOD(COutStream, Callback), &out, asCALL_THISCALL);

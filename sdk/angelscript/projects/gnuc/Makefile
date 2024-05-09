@@ -19,6 +19,12 @@
 # I still _miss_ the rotary telephone!
 
 
+# Use export CXXFLAGS="{options}" before running make to set type of compilation:
+#
+# For debugging I suggest using: -O0 -ggdb
+# For release I suggest using: -O2
+
+
 ## library names and versions
 LIBNAME=libangelscript
 AS_VER:=$(shell awk -F\" '/\#define ANGELSCRIPT_VERSION_STRING/{print $$2}' ../../include/angelscript.h | cut -d" " -f1)
@@ -111,6 +117,7 @@ SRCNAMES = \
   as_callfunc_mips.cpp \
   as_callfunc_ppc.cpp \
   as_callfunc_ppc_64.cpp \
+  as_callfunc_riscv64.cpp \
   as_callfunc_sh4.cpp \
   as_callfunc_x86.cpp \
   as_callfunc_x64_gcc.cpp \
@@ -147,6 +154,7 @@ ifeq ($(TARGETPLATFORM), iphone)
 else
 	OBJ += $(OBJDIR)/as_callfunc_arm_gcc.o
 	OBJ += $(OBJDIR)/as_callfunc_arm64_gcc.o
+	OBJ += $(OBJDIR)/as_callfunc_riscv64_gcc.o
 endif
 
 

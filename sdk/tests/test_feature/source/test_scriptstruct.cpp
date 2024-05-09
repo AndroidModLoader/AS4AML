@@ -90,6 +90,7 @@ bool Test_main()
     // Compile the script code
 	const char* scriptStr=
 			"class Bar {"
+			"       Bar() {}"  // explicitly define default constructor to avoid auto generated copy constructor
 			"       private Foo foo;"
 			"       void method(){"
 			"               print(666);"
@@ -102,13 +103,16 @@ bool Test_main()
     if( r < 0 )
 		TEST_FAILED;
 
-	// Create the script object with the Foo member
-	createBar();
+	if (r >= 0)
+	{
+		// Create the script object with the Foo member
+		createBar();
 
-	// Now release the created script object so that it is destroyed, which will
-	// trigger Foo to attempt to access the object from within the destructor
-	// of asCScriptObject
-	gBar->Release();
+		// Now release the created script object so that it is destroyed, which will
+		// trigger Foo to attempt to access the object from within the destructor
+		// of asCScriptObject
+		gBar->Release();
+	}
 
 	if( bout.buffer != " (0, 0) : Error   : The script object of type 'Bar' is being resurrected illegally during destruction\n" )
 	{
@@ -151,6 +155,250 @@ bool Test()
 	asIScriptEngine *engine;
 	COutStream out;
 	CBufferedOutStream bout;
+
+	// Mixins do not support deleting methods
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+
+		const char* script =
+			"mixin class A \n"
+			"{ \n"
+			" A() delete; \n"
+			" A(const A &inout) delete; \n"
+			" A &opAssign(const A &inout) delete; \n"
+			" void func() delete; \n"
+			"} \n"
+			"class B : A {} \n";
+
+		mod = engine->GetModule("t", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("script", script);
+
+		bout.buffer = "";
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer !=
+			"script (3, 2) : Error   : Mixin classes cannot have constructors or destructors\n"
+			"script (4, 10) : Error   : Identifier 'A' is not a data type in global namespace\n"
+			"script (4, 12) : Error   : Only object types that support object handles can use &inout. Use &in or &out instead\n"
+			"script (4, 2) : Error   : Mixin classes cannot have constructors or destructors\n"
+			"script (5, 2) : Error   : Identifier 'A' is not a data type in global namespace\n"
+			"script (5, 20) : Error   : Identifier 'A' is not a data type in global namespace\n"
+			"script (5, 22) : Error   : Only object types that support object handles can use &inout. Use &in or &out instead\n"
+			"script (5, 2) : Error   : Cannot flag function that will not be auto generated as deleted\n"
+			"script (6, 2) : Error   : Cannot flag function that will not be auto generated as deleted\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->Release();
+	}
+
+	// Interfaces do not support deleting methods
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+
+		const char* script =
+			"interface A \n"
+			"{ \n"
+			" A() delete; \n"
+			" A(const A &inout) delete; \n"
+			" A &opAssign(const A &inout) delete; \n"
+			" void func() delete; \n"
+			"} \n";
+
+		mod = engine->GetModule("t", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("script", script);
+
+		bout.buffer = "";
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer !=
+			"script (3, 3) : Error   : Expected identifier\n"
+			"script (3, 3) : Error   : Instead found '('\n"
+			"script (4, 3) : Error   : Expected identifier\n"
+			"script (4, 3) : Error   : Instead found '('\n"
+			"script (7, 1) : Error   : Unexpected token '}'\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->Release();
+	}
+
+	// When default functions are deleted it must not be possible to declared them separately without the delete
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+
+		const char* script =
+			"class A \n"
+			"{ \n"
+			" A() delete; \n"
+			" A(const A &inout) delete; \n"
+			" A &opAssign(const A &inout) delete; \n"
+			" A() {}; \n"
+			" A(const A &inout) {}; \n"
+			" A &opAssign(const A &inout) {return this;}; \n"
+			"}; \n"
+			"class B \n"
+			"{ \n"
+			" B() {}; \n"
+			" B(const B &inout) {}; \n"
+			" B &opAssign(const B &inout) {return this;}; \n"
+			" B() delete; \n"
+			" B(const B &inout) delete; \n"
+			" B &opAssign(const B &inout) delete; \n"
+			"}; \n";
+
+		mod = engine->GetModule("t", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("script", script);
+
+		bout.buffer = "";
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer != 
+			"script (6, 2) : Error   : Conflict with explicit declaration of function and deleted function\n"
+			"script (7, 2) : Error   : Conflict with explicit declaration of function and deleted function\n"
+			"script (8, 2) : Error   : Conflict with explicit declaration of function and deleted function\n"
+			"script (15, 2) : Error   : Conflict with explicit declaration of function and deleted function\n"
+			"script (16, 2) : Error   : Conflict with explicit declaration of function and deleted function\n"
+			"script (17, 2) : Error   : Conflict with explicit declaration of function and deleted function\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->Release();
+	}
+
+	// Give appropriate error if flagging auto generated functions as deleted but still providing statement block
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+
+		const char* script =
+			"class CBar \n"
+			"{ \n"
+			" CBar() delete {}; \n"
+			" CBar(const CBar &inout) delete {}; \n"
+			" CBar &opAssign(const CBar &inout) delete {}; \n"
+			"}; \n";
+
+		mod = engine->GetModule("t", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("script", script);
+
+		bout.buffer = "";
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer != 
+			"script (3, 2) : Error   : Deleted functions cannot have implementation\n"
+			"script (4, 2) : Error   : Deleted functions cannot have implementation\n"
+			"script (5, 2) : Error   : Deleted functions cannot have implementation\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->Release();
+	}
+
+	// Give appropriate error if flagging imported function, virtual property, ordinary function, class method, as 'delete', 
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"import void imported_function() delete from 'some module'; \n"
+			"void func() delete; \n"
+			"class foo { \n"
+			"  void method() delete; \n"
+			"  int prop { get delete; set delete; } \n"
+			"} \n");
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer !=
+			"test (1, 1) : Error   : Cannot flag function that will not be auto generated as deleted\n"
+			"test (2, 1) : Error   : Cannot flag function that will not be auto generated as deleted\n"
+			"test (4, 3) : Error   : Cannot flag function that will not be auto generated as deleted\n"
+			"test (5, 14) : Error   : Unexpected token 'delete'\n"
+			"test (5, 14) : Error   : Property accessor must be implemented\n"
+			"test (5, 24) : Error   : Missing definition of 'get_prop'\n"
+			"test (5, 26) : Error   : Unexpected token 'delete'\n"
+			"test (5, 26) : Error   : Property accessor must be implemented\n"
+			"test (5, 36) : Error   : Missing definition of 'set_prop'\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test auto generated copy constructor in shared class that contains non-copyable member
+	// The copy constructor should not be generated in this case, since it would give error
+	// https://www.gamedev.net/forums/topic/715618-assertion-failed-when-adding-default-copy-constructor/
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		const char* script = "shared class NotCopyable \n"
+			"{ \n"
+			"	NotCopyable(){} \n"
+			"	NotCopyable(int){} \n"
+			"   NotCopyable &opAssign(int){return this;} \n"
+			"} \n"
+			"shared class ContainsNotCopyable \n"
+			"{ \n"
+			"  NotCopyable nc;"
+			"} \n";
+
+		mod = engine->GetModule("module", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test", script);
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		mod = engine->GetModule("mod2", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test", script);
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		asITypeInfo *tp = mod->GetTypeInfoByName("ContainsNotCopyable");
+		if (tp)
+		{
+			int c = tp->GetBehaviourCount();
+			if (c != 9)  // default factory, default assign, addref, release, getrefcount, enumrefs, setgcflag, getgcflag, getweakrefflag
+				TEST_FAILED;
+		}
+		else
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+	}
 
 	// Test invalid copy constructor (when the type is passed by value instead of by ref or handle)
 	// https://www.gamedev.net/forums/topic/707147-runtime-crash-with-non-ref-copy-constructor/5427594/
@@ -544,7 +792,7 @@ bool Test()
 		engine->Release();
 	}
 
-	// For backwards compatibility the engine can be configured to allow acccess to private properties
+	// For backwards compatibility the engine can be configured to allow access to private properties
 	// http://www.gamedev.net/topic/658646-private-class-member-variables-act-like-cs-protected/
 	{
 		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
@@ -772,7 +1020,7 @@ bool Test()
 		if( r >= 0 )
 			TEST_FAILED;
 
-		if( bout.buffer != "test (8, 7) : Info    : Compiling B::B()\n"
+		if( bout.buffer != "test (8, 7) : Info    : Compiling auto generated B::B()\n"
                            "test (10, 26) : Error   : No matching symbol 'en_B'\n" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
@@ -960,7 +1208,7 @@ bool Test()
 		if( r >= 0 )
 			TEST_FAILED;
 
-		if( bout.buffer != "test (7, 7) : Info    : Compiling Bar::Bar()\n"
+		if( bout.buffer != "test (7, 7) : Info    : Compiling auto generated Bar::Bar()\n"
 						   "test (7, 7) : Error   : Base class doesn't have default constructor. Make explicit call to base constructor\n"
 						   "test (15, 3) : Info    : Compiling Bar2::Bar2()\n"
 						   "test (15, 10) : Error   : Base class doesn't have default constructor. Make explicit call to base constructor\n" )
@@ -1227,7 +1475,7 @@ bool Test()
 		r = mod->Build();
 		if( r >= 0 )
 			TEST_FAILED;
-		if( bout.buffer != "test2 (1, 7) : Info    : Compiling T::T()\n"
+		if( bout.buffer != "test2 (1, 7) : Info    : Compiling auto generated T::T()\n"
 		                   "test (2, 11) : Error   : No matching symbol 'func'\n" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
@@ -1967,23 +2215,82 @@ bool Test()
 		engine->Release();
 	}
 
-	// Default constructor and opAssign shouldn't be provided if a non-default constructor is implemented
+	// It is possible to exclude the default implementation of constructor, copy constructor, and opAssign
+    {
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+
+		const char* script =
+			"class CBar \n"
+			"{ \n"
+			" CBar() delete; \n"
+			" CBar(const CBar &inout) delete; \n"
+			" CBar &opAssign(const CBar &inout) delete; \n"
+			" CBar(int a) {}\n"
+			"}; \n"
+			"void func() \n"
+			"{ \n"
+			"  CBar a; \n" // not ok, default constructor is excluded
+			"  CBar b(1); \n" // ok, use explicit constructor
+			"  CBar c = CBar(1); \n" // not ok, default constructor and copy constructor are excluded, as is opAssign
+			"  b = b; \n" // not ok, default opAssign is excluded
+			"  CBar d(CBar(1)); \n" // not ok, default copy constructor is excluded
+			"}; \n";
+
+		mod = engine->GetModule("t", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("script", script);
+
+		bout.buffer = "";
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "script (8, 1) : Info    : Compiling void func()\n"
+			"script (10, 8) : Error   : No default constructor for object of type 'CBar'.\n"
+			"script (12, 8) : Error   : No default constructor for object of type 'CBar'.\n"
+			"script (12, 8) : Error   : No appropriate opAssign method found in 'CBar' for value assignment\n"
+			"script (13, 5) : Error   : No appropriate opAssign method found in 'CBar' for value assignment\n"
+			"script (14, 9) : Error   : No matching signatures to 'CBar(CBar&)'\n"
+			"script (14, 9) : Info    : Candidates are:\n"
+			"script (14, 9) : Info    : CBar@ CBar(int a)\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->Release();
+	}
+
+	// Default constructor shouldn't be provided if a non-default constructor is implemented
+	//  - ref: https://en.cppreference.com/w/cpp/language/default_constructor
+	// Default copy (opAssign) is still provided even if there is no opAssign implemented
+	//  - ref: https://en.cppreference.com/w/cpp/language/copy_assignment
+	// Default copy constructor is provided if no copy constructor is implemented
+	//	-ref: https://en.cppreference.com/w/cpp/language/copy_constructor
 	{
 		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
 		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
 
 		const char *script = 
-			"class CBar \n"
+			"class CBar \n" // no default constructor, no copy constructor, but opAssign is provided
 			"{ \n"
-			" CBar(int a) {}\n"
+			" CBar(int a) {}\n" // non default copy constructor (one parameter)
+			" CBar &opAssign(int a) {return this;}\n" // non default opAssign (one parameter)
+			"}; \n"
+			"class CBar2 \n" // default constructor, default copy constructor, default opAssign is provided
+			"{ \n"
 			"}; \n"
 			"void func() \n"
 			"{ \n"
-			"  CBar a; \n" // not ok
-			"  CBar b(1); \n" // ok
-			"  CBar c = CBar(1); \n" // not ok
-			"  b = b; \n" // not ok
-			"  CBar d(CBar()); \n" // not ok
+			"  CBar a; \n" // not ok, default constructor is not implemented due to other explicit constructors
+			"  CBar b(1); \n" // ok, use explicit constructor
+			"  CBar c = CBar(1); \n" // not ok, default constructor is not implemented due to explicit constructors
+			"  b = b; \n" // not ok, default opAssign is not implemented due to other explicit opAssign
+			"  CBar d(CBar(1)); \n" // not ok, default copy constructor is not implemented
+			"  CBar2 a2; \n" // ok, default constructor is implemented
+			"  CBar2 c2 = CBar2(); \n" // ok, default constructor and default copy constructor are implemented
+			"  a2 = a2; \n" // ok, opAssign is implemented
+			"  CBar2 d2(CBar2()); \n" // ok, default constructor and default copy constructor are implemented
 			"}; \n";
 
 		mod = engine->GetModule("t", asGM_ALWAYS_CREATE);
@@ -1994,19 +2301,126 @@ bool Test()
 		if( r >= 0 )
 			TEST_FAILED;
 
-		if( bout.buffer != "script (5, 1) : Info    : Compiling void func()\n"
-						   "script (7, 8) : Error   : No default constructor for object of type 'CBar'.\n"
-						   "script (9, 8) : Error   : No default constructor for object of type 'CBar'.\n"
-						   "script (9, 8) : Error   : No appropriate opAssign method found in 'CBar' for value assignment\n"
-						   "script (10, 5) : Error   : No appropriate opAssign method found in 'CBar' for value assignment\n"
-						   "script (11, 10) : Error   : No matching signatures to 'CBar()'\n"
-						   "script (11, 10) : Info    : Candidates are:\n"
-						   "script (11, 10) : Info    : CBar@ CBar(int a)\n" )
+		if( bout.buffer != "script (9, 1) : Info    : Compiling void func()\n"
+						   "script (11, 8) : Error   : No default constructor for object of type 'CBar'.\n"
+						   "script (13, 8) : Error   : No default constructor for object of type 'CBar'.\n"
+						   "script (13, 8) : Error   : No appropriate opAssign method found in 'CBar' for value assignment\n"
+						   "script (14, 5) : Error   : No appropriate opAssign method found in 'CBar' for value assignment\n"
+						   "script (15, 9) : Error   : No matching signatures to 'CBar(CBar&)'\n"
+						   "script (15, 9) : Info    : Candidates are:\n"
+						   "script (15, 9) : Info    : CBar@ CBar(int a)\n" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
 			TEST_FAILED;
 		}
  
+		engine->Release();
+	}
+
+	// inverted behaviour with engine properties
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_CONSTRUCT, 1);
+		engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY, 1);
+		engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT, 1);
+
+		const char* script =
+			"class CBar \n"
+			"{ \n"
+			" CBar(int a) {}\n" // non default copy constructor (one parameter)
+			" CBar &opAssign(int a) {return this;}\n" // non default opAssign (one parameter)
+			"}; \n"
+			"class CBar2 \n"
+			"{ \n"
+			"}; \n"
+			"void func() \n"
+			"{ \n"
+			"  CBar a; \n" // ok, app requested to always implement default constructor even if other constructors are explicitly defined
+			"  CBar b(1); \n" // ok, use explicit constructor
+			"  CBar c = CBar(1); \n" // ok, default copy constructor is implemented even if other constructors are explicitly defined
+			"  b = b; \n" // ok, default opAssign is implemented upon request from app
+			"  CBar d(CBar(1)); \n" // ok, default constructor and default copy constructor are implemented
+			"  CBar2 a2; \n" // ok, default constructor is implemented
+			"  CBar2 c2 = CBar2(); \n" // ok, default constructor and default copy constructor are implemented
+			"  a2 = a2; \n" // ok, default opAssign is implemented as there are no explicit constructors
+			"  CBar2 d2(CBar2()); \n" // ok, default constructor and default copy constructor are implemented
+			"}; \n";
+
+		mod = engine->GetModule("t", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("script", script);
+
+		bout.buffer = "";
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->Release();
+	}
+
+	// never implement behaviour with engine properties
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_CONSTRUCT, 2); // 2 == never
+		engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY, 2); // 2 == never
+		engine->SetEngineProperty(asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT, 2); // 2 == never
+
+		const char* script =
+			"class CBar \n"
+			"{ \n"
+			" CBar(int a) {}\n" // non default copy constructor (one parameter)
+			" CBar &opAssign(int a) {return this;}\n" // non default opAssign (one parameter)
+			"}; \n"
+			"class CBar2 \n"
+			"{ \n"
+			"}; \n"
+			"void func() \n"
+			"{ \n"
+			"  CBar a; \n" // not ok, app requested to never implement default constructor 
+			"  CBar b(1); \n" // ok, use explicit constructor
+			"  CBar c = CBar(1); \n" // not ok, default copy constructor is never implemented
+			"  b = b; \n" // not ok, default opAssign is never implemented upon request from app
+			"  CBar d(CBar(1)); \n" // not ok, default constructor and default copy constructor are not implemented
+			"  CBar2 a2; \n" // not ok, default constructor is not implemented
+			"  CBar2 c2 = CBar2(); \n" // not ok, default constructor and default copy constructor are not implemented
+			"  a2 = a2; \n" // not ok, default opAssign is not implemented 
+			"  CBar2 d2(CBar2()); \n" // not ok, default constructor and default copy constructor are not implemented
+			"}; \n";
+
+		mod = engine->GetModule("t", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("script", script);
+
+		bout.buffer = "";
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer != 
+			"script (9, 1) : Info    : Compiling void func()\n"
+			"script (11, 8) : Error   : No default constructor for object of type 'CBar'.\n"
+			"script (13, 8) : Error   : No default constructor for object of type 'CBar'.\n"
+			"script (13, 8) : Error   : No appropriate opAssign method found in 'CBar' for value assignment\n"
+			"script (14, 5) : Error   : No appropriate opAssign method found in 'CBar' for value assignment\n"
+			"script (15, 9) : Error   : No matching signatures to 'CBar(CBar&)'\n"
+			"script (15, 9) : Info    : Candidates are:\n"
+			"script (15, 9) : Info    : CBar@ CBar(int a)\n"
+			"script (16, 9) : Error   : Data type can't be 'CBar2'\n"
+			"script (17, 9) : Error   : Data type can't be 'CBar2'\n"
+			"script (18, 8) : Error   : No matching symbol 'a2'\n"
+			"script (18, 3) : Error   : No matching symbol 'a2'\n"
+			"script (19, 9) : Error   : Data type can't be 'CBar2'\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
 		engine->Release();
 	}
 

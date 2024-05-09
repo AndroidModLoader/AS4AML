@@ -496,7 +496,7 @@ bool Test()
 	int r;
 
 	// TODO: The serialized context must be 32bit/64bit agnostic, both for program pointer and stack pointer
-	// TODO: Test serializing contexts with nested calls
+	// TODO: Test serializing contexts with nested calls. Although technically possible, it would be a very odd situation since a nested call means the lower execution is actually active, and it isn't possible to deserialize a context in active state since when deserializing it will finish in suspended state
 	// TODO: Test serializing references to ref types and handles to ref types
 	// TODO: Test serializing class method calls
 	// TODO: Test serializing a delegate call
@@ -505,6 +505,104 @@ bool Test()
 	// TODO: Test serializing when multiple stack memory blocks are used, and also when deserializing on a contex with different initContextStackSize
 	// ref: https://github.com/SpehleonLP/Zodiac
 	//      https://github.com/SpehleonLP/Zodiac/blob/main/src/z_zodiaccontext.cpp
+
+	// Test with asEP_ALLOW_UNSAFE_REFERENCES on
+	// https://www.gamedev.net/forums/topic/714777-asep_allow_unsafe_references-caused-ccontextserializer-to-crash/5458480/
+	{
+		asIScriptEngine* engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetEngineProperty(asEP_ALLOW_UNSAFE_REFERENCES, true);
+
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterStdString(engine);
+		engine->RegisterGlobalFunction("void print(const string &in)", asFUNCTION(print), asCALL_GENERIC);
+		g_buf = "";
+		engine->RegisterGlobalFunction("void pause()", asFUNCTION(pause), asCALL_GENERIC);
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void main() \n"
+			"{ \n"
+			// when level2 is called, a reference to 'd' is already pushed on the stack, an index to the variable holding 'c' is pushed on the stack, and the value 3.14
+			// the string 'c' is also stored in a local variable where the object is actually allocated on the heap
+			// when level3 is called the value 42 is already pushed on the stack
+			"  string c = level1(level2(level3('test'), 42), 3.14, 'c', 'd'); \n"
+			"  print('result: '+c+'\\n'); \n"
+			"} \n"
+			"string level1(const string &in a, double b, string c, const string &in d) \n"
+			"{ \n"
+			"  return a+b+c+d; \n"
+			"} \n"
+			"string level2(const string &in a, double b) \n"
+			"{ \n"
+			"  return a+b; \n"
+			"} \n"
+			"string level3(const string &in a) \n"
+			"{ \n"
+			"  pause(); \n" // this is where the script will be serialized
+			"  return a; \n"
+			"} \n"
+		);
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+		bout.buffer = "";
+
+		// Start execution
+		asIScriptContext* ctx = engine->CreateContext();
+		ctx->Prepare(mod->GetFunctionByName("main"));
+		r = ctx->Execute();
+		if (r != asEXECUTION_SUSPENDED)
+			TEST_FAILED;
+
+		// Serialize the context
+		CContextSerializer storage;
+		r = storage.Serialize(ctx);
+		if (r < 0)
+			TEST_FAILED;
+
+		// Destroy the context
+		ctx->Release();
+
+		// Create a new context
+		ctx = engine->CreateContext();
+
+		// Deserialize the context
+		r = storage.Deserialize(ctx);
+		if (r < 0)
+			TEST_FAILED;
+
+		// Resume execution
+		r = ctx->Execute();
+		if (r != asEXECUTION_FINISHED)
+		{
+			if (r == asEXECUTION_EXCEPTION)
+				PRINTF("Exception: %s\n", GetExceptionInfo(ctx).c_str());
+			TEST_FAILED;
+		}
+		ctx->Release();
+
+		if (g_buf != "result: test423.14cd\n")
+		{
+			PRINTF("%s", g_buf.c_str());
+			TEST_FAILED;
+		}
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
 
 	// Test serializing context in the middle of setting up arguments for a function call
 	// Arguments are pushed on the stack from last to first.

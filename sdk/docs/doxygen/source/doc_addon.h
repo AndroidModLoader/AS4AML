@@ -936,7 +936,7 @@ doesn't match the stored handle the returned pointer will be null.
 To retrieve an object of an unknown type use the GetType() or GetTypeId() to
 determine the type stored in the handle, then use the Cast() method.
 
-
+\todo Show example of returning a dynamically registered function from application
 
 
 
@@ -1761,6 +1761,10 @@ The macros are defined as:
 // Wrap a class method with implicit or explicit signature
 #define WRAP_MFN(ClassType, name)
 #define WRAP_MFN_PR(ClassType, name, Parameters, ReturnType)
+
+// Wrap a class method that will emulate a global function
+#define WRAP_MFN_GLOBAL(ClassType, name)
+#define WRAP_MFN_GLOBAL_PR(ClassType, name, Parameters, ReturnType)
 
 // Wrap a global function that will emulate a class method and receives the 'this' pointer as the first argument
 #define WRAP_OBJ_FIRST(name)

@@ -113,6 +113,18 @@ If this flag is set to true, the compiler will always provide a default construc
 by the script. Normally this option is not recommended, because if a script class provides a non-default constructor but not the 
 default constructor it is most likely because it is desired that the class should always be initialized with the non-default constructor.
 
+\todo describe Option 2
+
+\todo A default copy constructor is also provided
+
+\ref asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT
+
+\todo Describe this, backwards compatiblity with pre-2.37.0
+
+\ref asEP_ALWAYS_IMPL_DEFAULT_COPY
+
+\todo Describe this, backwards compatiblity with pre-2.37.0
+
 \ref asEP_ALTER_SYNTAX_NAMED_ARGS
 
 If this flag is set to 1 or 2 the compiler will accept the '=' instead of ':' for \ref function "naming arguments in function calls". 
@@ -219,6 +231,14 @@ By default AngelScript's incremental garbage collector is executed as scripts ar
 a slight overhead to the execution, which is normally tolerable but in some applications the CPU cycles may be needed for other
 things. In this case the automatic execution of the garbage collector can be turned off to hold off on the execution until the
 CPU can be spared.
+
+\see \ref doc_gc
+
+\ref asEP_DISABLE_SCRIPT_CLASS_GC
+
+By default the script compiler will detect script classes that can potentially form circular references and will flag them for
+garbage detection. If it is known that no circular references are formed, or if they are manually resolved in the script, it is
+possible to disable this to increase performance.
 
 \see \ref doc_gc
  

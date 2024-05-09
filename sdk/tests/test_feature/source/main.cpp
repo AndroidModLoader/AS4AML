@@ -51,10 +51,8 @@ bool TestVirtualInheritance();
 bool TestStack();
 bool TestExecuteString();
 bool TestCondition();
-bool TestFuncOverload();
 bool TestNeverVisited();
 bool TestNested();
-bool TestConstructor();
 bool TestOptimize();
 bool TestNotInitialized();
 bool TestVector3();
@@ -77,7 +75,6 @@ namespace TestMultiAssign       { bool Test(); }
 namespace TestSaveLoad          { bool Test(); }
 namespace TestConstructor2      { bool Test(); }
 namespace TestContext           { bool Test(); }
-namespace TestScriptCall        { bool Test(); }
 namespace TestArray             { bool Test(); }
 namespace TestArrayHandle       { bool Test(); }
 namespace TestStdVector         { bool Test(); }
@@ -155,9 +152,11 @@ namespace TestThiscallAsGlobal  { bool Test(); }
 namespace TestPow               { bool Test(); }
 namespace TestThisCallMethod    { bool Test(); }
 namespace TestThisCallMethod_ConfigErrors { bool Test(); }
-namespace TestPropIntegerDivision { bool Test(); }
-namespace TestComposition       { bool Test(); }
-namespace Test_Native_DefaultFunc { bool Test(); }
+namespace TestPropIntegerDivision         { bool Test(); }
+namespace TestComposition                 { bool Test(); }
+namespace Test_Native_DefaultFunc         { bool Test(); }
+namespace TestFuncOverload                { bool Test(); }
+namespace TestConstructor                 { bool Test(); }
 
 namespace Test_Addon_ScriptArray   { bool Test(); }
 namespace Test_Addon_ScriptHandle  { bool Test(); }
@@ -175,21 +174,25 @@ namespace Test_Addon_StdString     { bool Test(); }
 
 #include "utils.h"
 
-void DetectMemoryLeaks()
-{
+// This class should be declared as a global singleton so the leak detection is initiated as soon as possible
 #if defined(_MSC_VER)
-	_CrtSetDbgFlag(_CRTDBG_LEAK_CHECK_DF|_CRTDBG_ALLOC_MEM_DF);
-	_CrtSetReportMode(_CRT_ASSERT,_CRTDBG_MODE_FILE);
-	_CrtSetReportFile(_CRT_ASSERT,_CRTDBG_FILE_STDERR);
+class MemoryLeakDetector
+{
+public:
+	MemoryLeakDetector()
+	{
+		_CrtSetDbgFlag(_CRTDBG_LEAK_CHECK_DF | _CRTDBG_ALLOC_MEM_DF);
+		_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+		_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
 
-	// Use _CrtSetBreakAlloc(n) to find a specific memory leak
-	// Remember to "Enable Windows Debug Heap Allocator" in the debug options on MSVC2015. Without it
-	// enabled the memory allocation numbers shifts randomly from one execution to another making it
-	// impossible to predict the correct number for a specific allocation.
-	//_CrtSetBreakAlloc(924);
-
+		// Use _CrtSetBreakAlloc(n) to find a specific memory leak
+		// Remember to "Enable Windows Debug Heap Allocator" in the debug options on MSVC2015. Without it
+		// enabled the memory allocation numbers shifts randomly from one execution to another making it
+		// impossible to predict the correct number for a specific allocation.
+		//_CrtSetBreakAlloc(124);
+	}
+} g_leakDetector;
 #endif
-}
 
 // This class is just to verify that releasing the engine as part of the cleanup
 // of global variables doesn't cause crashes due to out-of-order cleanup with
@@ -210,8 +213,6 @@ public:
 
 int allTests()
 {
-	DetectMemoryLeaks();
-
 	PRINTF("AngelScript version: %s\n", asGetLibraryVersion());
 	PRINTF("AngelScript options: %s\n", asGetLibraryOptions());
 
@@ -308,7 +309,7 @@ int allTests()
 	if( TestExceptionMemory::Test()             ) goto failed; else PRINTF("-- TestExceptionMemory passed\n");
 	if( TestObject::Test()                      ) goto failed; else PRINTF("-- TestObject passed\n");
 	if( TestFactory::Test()                     ) goto failed; else PRINTF("-- TestFactory passed\n");
-	if( TestFuncOverload()                      ) goto failed; else PRINTF("-- TestFuncOverload passed\n");
+	if( TestFuncOverload::Test()                ) goto failed; else PRINTF("-- TestFuncOverload passed\n");
 	if( TestObjZeroSize::Test()                 ) goto failed; else PRINTF("-- TestObjZeroSize passed\n");
 	if( TestSingleton::Test()                   ) goto failed; else PRINTF("-- TestSingleton passed\n");
 	if( TestCondition()                         ) goto failed; else PRINTF("-- TestCondition passed\n");
@@ -330,7 +331,7 @@ int allTests()
 	if( TestSuspend::Test()                     ) goto failed; else PRINTF("-- TestSuspend passed\n");
 	if( TestVector3_2::Test()                   ) goto failed; else PRINTF("-- TestVector3_2 passed\n");
 	if( TestNested()                            ) goto failed; else PRINTF("-- TestNested passed\n");
-	if( TestConstructor()                       ) goto failed; else PRINTF("-- TestConstructor passed\n");
+	if( TestConstructor::Test()                 ) goto failed; else PRINTF("-- TestConstructor passed\n");
 	if( TestExecuteScript()                     ) goto failed; else PRINTF("-- TestExecuteScript passed\n");
 	if( TestCustomMem::Test()                   ) goto failed; else PRINTF("-- TestCustomMem passed\n");
 	if( TestPostProcess::Test()                 ) goto failed; else PRINTF("-- TestPostProcess passed\n");
