@@ -23,4 +23,9 @@ LOCAL_CFLAGS += -O2 -mfloat-abi=softfp -DNDEBUG -std=c++14 -DAS_NO_THREADS -DAS4
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/sdk/angelscript/include \
                     $(LOCAL_PATH)/sdk/add_on
 LOCAL_LDLIBS += -llog
+
+ifeq ($(TARGET_ARCH_ABI), armeabi-v7a)
+	LOCAL_CFLAGS += -mfpu=neon
+endif
+
 include $(BUILD_SHARED_LIBRARY)
