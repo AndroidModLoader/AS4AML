@@ -205,7 +205,10 @@ _CallARM64RetInMemory:
     ret
     .cfi_endproc
 
-.subsections_via_symbols
+// Check your code before publishing it, AS team
+#ifdef __APPLE__
+  .subsections_via_symbols
+#endif
 
 #endif /* __aarch64__ */
 
