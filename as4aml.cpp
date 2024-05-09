@@ -212,7 +212,7 @@ std::string GetMyName()
 }
 std::string GetCurrentGame()
 {
-    aml->GetCurrentGame();
+    return aml->GetCurrentGame();
 }
 
 // Kinda main thing here
@@ -307,5 +307,4 @@ void AddAS4AMLFuncs()
     #endif // !AS_64BIT_PTR
     engine->RegisterGlobalFunction("string AML_GetMyName()", asFUNCTION(GetMyName), asCALL_STDCALL);
     engine->RegisterGlobalFunction("string AML_GetCurrentGame()", asFUNCTION(GetCurrentGame), asCALL_STDCALL);
-    
 }
