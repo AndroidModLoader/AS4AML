@@ -101,12 +101,23 @@ best matching method is used. An assignment operator can for example be implemen
   }
 </pre>
 
-All script classes have a default assignment operator that does a bitwise copy of the content of the class,
-so if that is all you want to do, then there is no need to implement this method. 
 
-\todo This statement is wrong. The auto generated opAssign doesn't do a bitwise copy. Also, it is not always generated, only when the script class isn't declaring any constructors
 
-\todo It is possible to delete the auto generated opAssign with obj &opAssign(const obj &inout) delete;
+
+\subsection doc_script_class_assign_ops_auto Auto-generated assignment operator
+
+The compiler will automatically generate an opAssign to copy the content of an instance of the same type 
+in case no opAssign method with a single parameter is explicitly declared. The generated opAssign will simply copy each member.
+
+If the auto generated opAssign is not desired, then it can be explicitly excluded by flagging it as deleted.
+
+<pre>
+  class MyClass
+  {
+	MyClass &opAssign(const MyClass &inout) delete;
+  }
+</pre>
+
 
 
 
@@ -150,8 +161,8 @@ parameters, the first is for the indexing, and the second for the new value.
 <pre>
   class MyObj
   {
-    float get_opIndex(int idx) const       { return 0; }
-    void set_opIndex(int idx, float value) { }
+    float get_opIndex(int idx) const property { return 0; }
+    void set_opIndex(int idx, float value) property { }
   }
 </pre>
 
@@ -235,5 +246,8 @@ An example where the opCast/opImplCast operator overloads come in handy is when 
 
 \see \ref conversion, \ref doc_adv_inheritappclass
 
+\section doc_script_class_foreach_ops Foreach loop operators
+
+\todo Document this. reference \ref while
 
 */

@@ -4,6 +4,7 @@
 #include "../../../add_on/scriptany/scriptany.h"
 #include "../../../add_on/scriptmath/scriptmath.h"
 #include "../../../add_on/scriptmath/scriptmathcomplex.h"
+#include "../../../add_on/scripthandle/scripthandle.h"
 #include <iostream>
 
 using namespace std;
@@ -170,6 +171,31 @@ void *NullFactory()
 	return 0;
 }
 
+class CTestStringFactory : public asIStringFactory
+{
+public:
+	CTestStringFactory() {};
+	~CTestStringFactory() {};
+	const void* GetStringConstant(const char* /*data*/, asUINT /*length*/)
+	{
+		return &test;
+	}
+	int  ReleaseStringConstant(const void* /*str*/)
+	{
+		return 0;
+	}
+	int  GetRawStringData(const void* /*str*/, char* data, asUINT* length) const
+	{
+		if( data )
+			memcpy(data, test.c_str(), test.length());
+		*length = (asUINT)test.length();
+		return 0;
+	}
+	string test;
+};
+
+CTestStringFactory testStringFactory;
+
 bool Test()
 {
 	bool fail = false;
@@ -179,6 +205,110 @@ bool Test()
 	CBufferedOutStream bout;
 	COutStream out;
 	asIScriptModule *mod;
+
+	// Passing const value types by value to constructors as implicit conversion
+	// https://www.gamedev.net/forums/topic/717880-asbehave_construct-with-custom-pod-string-type-requires-const/5468147/
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		engine->RegisterObjectType("string_view", 1, asOBJ_VALUE | asOBJ_POD);
+		engine->RegisterStringFactory("const string_view", &testStringFactory);
+		engine->RegisterObjectType("type", 1, asOBJ_VALUE);
+		engine->RegisterObjectBehaviour("type", asBEHAVE_CONSTRUCT, "void f(const type &in)", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterObjectBehaviour("type", asBEHAVE_CONSTRUCT, "void f(string_view)", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterObjectBehaviour("type", asBEHAVE_DESTRUCT, "void f()", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterGlobalFunction("void test(type)", asFUNCTION(0), asCALL_GENERIC);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void main() { \n"
+			"  type t('test'); \n"
+			"  test('test'); \n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+	// Assign with invalid type
+	// https://www.gamedev.net/forums/topic/717831-failed-assertion-on-const-type-w-invalid-assignment/
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"class Foo {}\n"
+			"void Main() {\n"
+			"  const Foo f = 10; \n"
+			"}\n");
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+		if (bout.buffer != "test (2, 1) : Info    : Compiling void Main()\n"
+						   "test (3, 17) : Error   : Can't implicitly convert from 'const int' to 'Foo&'.\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+		engine->ShutDownAndRelease();
+	}
+
+	// Attempt assigning 0 to null
+	// Reported by Sam Tupy
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+		r = ExecuteString(engine, "null = 0;");
+		if (r >= 0)
+			TEST_FAILED;
+		if (bout.buffer != "ExecuteString (1, 1) : Error   : Expression is not an l-value\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+		engine->ShutDownAndRelease();
+	}
+
+	// Test passing value type to function argument that is expecting an ashandle type
+	// https://www.gamedev.net/forums/topic/717451-failed-assertion-when-assigning-string-to-ref/5466156/
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterStdString(engine);
+		RegisterScriptHandle(engine);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void main() { ref@ a = 'a'; } \n");
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer != 
+			"test (1, 1) : Info    : Compiling void main()\n"
+			"test (1, 24) : Error   : Object handle is not supported for this type\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
 
 	// Test array of handles with default syntax
 	// https://www.gamedev.net/forums/topic/715669-4-assertion-errors-with-nested-lists-of-handles/
@@ -282,7 +412,62 @@ bool Test()
 		engine->ShutDownAndRelease();
 	}
 
+	// Test using a special type as proxy and allow it to take assignments even for temporary objects
+	// TODO: The cGenericDataVar should have an indicator to tell the compiler it should allow value 
+	//       assign even though it is a temporary obect (non lvalue)
+	// Found in Frictional Games source code
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		const char* config = R"config( 
+		objtype "cStringID" 2826
+		objbeh "cStringID" 2 "void cStringID()"
+		objbeh "cStringID" 0 "void cStringID()"
+		objbeh "cStringID" 0 "void cStringID(const cStringID&in)"
+		objtype "cGenericDataVar" 2826
+		objbeh "cGenericDataVar" 2 "void cGenericDataVar()"
+		objbeh "cGenericDataVar" 0 "void cGenericDataVar()"
+		objbeh "cGenericDataVar" 0 "void cGenericDataVar(const cGenericDataVar&in)"
+		objmthd "cGenericDataVar" "cGenericDataVar& opAssign(const cGenericDataVar&in)"
+		objmthd "cGenericDataVar" "cGenericDataVar& opAssign(const float&in)"
+		objtype "cGenericData" 1
+		objbeh "cGenericData" 3 "cGenericData@ cGenericData()"
+		objbeh "cGenericData" 5 "void $beh5()"
+		objbeh "cGenericData" 6 "void $beh6()"
+		objmthd "cGenericData" "cGenericDataVar opIndex(cStringID)"
+)config";
+
+		std::stringstream strm;
+		strm << config;
+		strm.seekp(0);
+		ConfigEngineFromStream(engine, strm, "config", &stringFactory);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"class cScrFancyTextModule { \n"
+			"	void SetVariable(cStringID a_sidVariable, float afValue){ mVariableData[a_sidVariable] = afValue; }\n"
+			"	cGenericData mVariableData;	\n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
 	// Test that expression with non lvalue used in assign op gives error
+	// TODO: This test can only be re-enabled after I've added support to indicate if 
+	// certain types should allow assignment even though not being lvalue 
+	// (for use as proxy for doing some complex operation))
+	/*
 	{
 		engine = asCreateScriptEngine();
 		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
@@ -316,6 +501,7 @@ bool Test()
 
 		engine->ShutDownAndRelease();
 	}
+	*/
 
 	// Test assert failure with bitwise operators on booleans
 	// https://www.gamedev.net/forums/topic/711744-assertion-failed-on-invalid-use-of-enum-bit-flags/5445257/
@@ -3473,6 +3659,7 @@ bool Test()
 		engine->Release();
 	}
 
+	// The compiler should be able to call a base class' constructor automatically if all parameters have default values
 	// Problem reported by ekimr
 	{
 		const char *script =
@@ -4740,6 +4927,7 @@ bool Test()
 	}
 
 	//////////////
+	// Test that enum values are not found without the explicit scope if there are other symbols with the same name
 	{
 		const char *script =
 			"enum wf_type \n"

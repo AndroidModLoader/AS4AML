@@ -30,6 +30,8 @@ This page gives a brief description of the add-ons that you'll find in the /sdk/
  - \subpage doc_addon_grid
  - \subpage doc_addon_datetime
  - \subpage doc_addon_helpers_try
+ 
+\todo add socket
 
 
 
@@ -64,6 +66,7 @@ public:
   asUINT getHour() const;
   asUINT getMinute() const;
   asUINT getSecond() const;
+  asUINT getWeekDay() const;
   
   // Setters
   // Returns true if valid
@@ -936,8 +939,48 @@ doesn't match the stored handle the returned pointer will be null.
 To retrieve an object of an unknown type use the GetType() or GetTypeId() to
 determine the type stored in the handle, then use the Cast() method.
 
-\todo Show example of returning a dynamically registered function from application
+\section doc_addon_handle_5 Example on how to return a newly registered function from C++
 
+The following is a bit more practical example of using the CScriptHandle to return a recently registered function. The 
+function could for example have been loaded from a shared library, based on informed function and name from the script.
+
+\code
+// This C++ function would be called from script, register a new C++ function and then return it to the script as a function pointer
+// Register with engine->RegisterGlobalFunction("ref @getDynamicFunction()", asFUNCTION(getDynamicFunction), asCALL_CDECL);
+CScriptHandle getDynamicFunction()
+{
+  // Get the active context and engine to register the function with
+  asIScriptContext* ctx = asGetActiveContext();
+  asIScriptEngine *engine = ctx->GetEngine();
+
+  // Register the function. The actual function could be dynamically loaded from a shared library
+  int funcId = engine->RegisterGlobalFunction("void dynamicFunction()", asFUNCTION(dynamicFunction), asCALL_CDECL);
+
+  // Create the CScriptHandle and put the function pointer in it for return to script
+  asIScriptFunction* func = engine->GetFunctionById(funcId);
+  CScriptHandle ref;
+  ref.Set(func, engine->GetTypeInfoById(func->GetTypeId()));
+
+  return ref;
+}
+\endcode
+
+In the script the this would be used in the following way:
+
+<pre>
+  funcdef void func();
+  void main()
+  {
+    // Get the function pointer as a generic ref
+    ref \@r = getDynamicFunction();
+
+    // Cast the ref to the expected function pointer
+    func \@f = cast<func>(r);
+
+    // Call the function
+    f();
+  }
+</pre>
 
 
 
@@ -1869,7 +1912,7 @@ int CompareEquality(asIScriptEngine *engine, void *leftObj, void *rightObj, int 
 int ExecuteString(asIScriptEngine *engine, const char *code, asIScriptModule *mod = 0, asIScriptContext *ctx = 0);
 
 // Compile and execute simple statements with option of return value.
-// The module is optional. If given the statements can access the entitites compiled in the module.
+// The module is optional. If given the statements can access the entities compiled in the module.
 // The caller can optionally provide its own context, for example if a context should be reused.
 int ExecuteString(asIScriptEngine *engine, const char *code, void *ret, int retTypeId, asIScriptModule *mod = 0, asIScriptContext *ctx = 0);
 

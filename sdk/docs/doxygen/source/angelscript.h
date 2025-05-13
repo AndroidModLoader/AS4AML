@@ -1,6 +1,6 @@
 /*
    AngelCode Scripting Library
-   Copyright (c) 2003-2024 Andreas Jonsson
+   Copyright (c) 2003-2025 Andreas Jonsson
 
    This software is provided 'as-is', without any express or implied
    warranty. In no event will the authors be held liable for any
@@ -63,9 +63,9 @@ BEGIN_AS_NAMESPACE
 
 // AngelScript version
 
-//! Version 2.37.0
-#define ANGELSCRIPT_VERSION        23700
-#define ANGELSCRIPT_VERSION_STRING "2.37.0"
+//! Version 2.38.0
+#define ANGELSCRIPT_VERSION        23800
+#define ANGELSCRIPT_VERSION_STRING "2.38.0 WIP"
 
 // Data types
 
@@ -253,7 +253,7 @@ enum asEEngineProp
 	asEP_AUTO_GARBAGE_COLLECT               = 16,
 	//! Disallow the use of global variables in the script. Default: false
 	asEP_DISALLOW_GLOBAL_VARS               = 17,
-	//! When true, the compiler will always provide a default constructor for script classes. Default: false
+	//! Determine if the default constructor is provided automatically by compiler. 0 - as per language spec, 1 - always, 2 - never. Default: 0
 	asEP_ALWAYS_IMPL_DEFAULT_CONSTRUCT      = 18,
 	//! Set how warnings should be treated: 0 - dismiss, 1 - emit, 2 - treat as error. Default: 1
 	asEP_COMPILER_WARNINGS                  = 19,
@@ -293,6 +293,12 @@ enum asEEngineProp
 	asEP_ALWAYS_IMPL_DEFAULT_COPY           = 36,
 	//! Determine if the default copy constructor is provided automatically by compiler. 0 - as per language spec, 1 - always, 2 - never. Default: 0
 	asEP_ALWAYS_IMPL_DEFAULT_COPY_CONSTRUCT = 37,
+	//! \todo document this
+	asEP_MEMBER_INIT_MODE                   = 38,
+	//! \todo document this
+	asEP_BOOL_CONVERSION_MODE               = 39,
+	//! \todo document this
+	asEP_FOREACH_SUPPORT                    = 40,
 
 	asEP_LAST_PROPERTY
 };
@@ -541,6 +547,7 @@ enum asETokenClass
 
 // Type id flags
 //! \brief Type id flags
+//! \see \ref doc_typeid
 enum asETypeIdFlags
 {
 	//! The type id for void
@@ -637,7 +644,9 @@ enum asEFuncType
 	//! \brief An imported function
 	asFUNC_IMPORTED  = 5,
 	//! \brief A function delegate
-	asFUNC_DELEGATE  = 6
+	asFUNC_DELEGATE  = 6,
+	//! \todo document this
+	asFUNC_TEMPLATE  = 7
 };
 
 // Is the target a 64bit system?
@@ -701,6 +710,7 @@ typedef void (*asJITFunction)(asSVMRegisters* registers, asPWORD jitArg);
 // This macro does basically the same thing as offsetof defined in stddef.h, but
 // GNUC should not complain about the usage as I'm not using 0 as the base pointer.
 //! \brief Returns the offset of an attribute in a struct
+//! \todo Explain that it doesn't work for members that are declared as references. For these the offset must be manually calculated. Reference Register object properties with a more detailed explanation on how to deal with this
 #define asOFFSET(s,m) ((int)(size_t)(&reinterpret_cast<s*>(100000)->m)-100000)
 
 //! \brief Returns an asSFuncPtr representing the function specified by the name
@@ -1203,6 +1213,8 @@ public:
 	//! It is recommended to register the message callback routine right after creating the engine,
 	//! as some of the registration functions can provide useful information to better explain errors.
 	virtual int SetMessageCallback(const asSFuncPtr &callback, void *obj, asDWORD callConv) = 0;
+	//! \todo document this
+	virtual int GetMessageCallback(asSFuncPtr *callback, void **obj, asDWORD *callConv) = 0;
 	//! \brief Clears the registered message callback routine.
 	//! \return A negative value on error.
 	//!
@@ -1514,11 +1526,21 @@ public:
 	//!
 	//! \see \ref doc_strings
 	virtual int RegisterStringFactory(const char *datatype, asIStringFactory *factory) = 0;
+	//! \brief Returns the type id of the type that the string factory returns, and optionally the actual string factory.
+	//! \param[out] typeModifiers The \ref asETypeModifiers "type modifiers" for the return type
+	//! \param[out] factory The pointer to the string factory that is currently registered
+	//! \return The type id of the type that the string type returns, or a negative value on error.
+	//! \retval asNO_FUNCTION The string factory has not been registered.
+	virtual int GetStringFactory(asDWORD* typeModifiers = 0, asIStringFactory** factory = 0) const = 0;
+#ifdef AS_DEPRECATED
+	// deprecated since 2024-07-27, 2.38.0
 	//! \brief Returns the type id of the type that the string factory returns.
 	//! \return The type id of the type that the string type returns, or a negative value on error.
 	//! \param[out] flags The \ref asETypeModifiers "type modifiers" for the return type
 	//! \retval asNO_FUNCTION The string factory has not been registered.
+	//! \deprecated Since 2.38.0. Use \ref asIScriptEngine::GetStringFactory instead
 	virtual int GetStringFactoryReturnTypeId(asDWORD *flags = 0) const = 0;
+#endif
 	//! \}
 
 	// Default array type
@@ -1724,10 +1746,11 @@ public:
 	//! \name Script functions
 	//! \{
 
-	//! \brief
-	//! \return
+	//! \brief Returns the highest id used for functions
+	//! \return The highest id used for functions
 	//!
-	//! \todo document this
+	//! The function can be used to get the last function id in order to enumerate 
+	//! all known functions with the use of \ref GetFunctionById.
 	virtual int                GetLastFunctionId() const = 0;
 	//! \brief Returns the function by its id.
 	//! \param[in] funcId The id of the function or method.
@@ -2174,7 +2197,7 @@ public:
 	//! <pre>  void (param::*)(asIScriptContext *);</pre>
 	//!
 	//! See \ref doc_cpp_exceptions_1 for an example on how to use this.
-	virtual int SetTranslateAppExceptionCallback(asSFuncPtr callback, void *param, int callConv) = 0;
+	virtual int SetTranslateAppExceptionCallback(const asSFuncPtr &callback, void *param, int callConv) = 0;
 	//! \}
 
 protected:
@@ -2225,12 +2248,12 @@ public:
 	//! informed in number of bytes.
 	virtual int         GetRawStringData(const void *str, char *data, asUINT *length) const = 0;
 
-protected:
+	// The destructor doesn't have to be protected as the string factory is not necessarily reference counted
 	virtual ~asIStringFactory() {}
 };
 #endif
 
-//! \ingroup api_auxiliary_functions
+//! \ingroup api_auxiliary_interfaces
 //! \brief The interface for the thread manager
 //!
 //! This interface is used to represent the internal thread manager
@@ -2800,7 +2823,7 @@ public:
 	//! \retval asINVALID_ARG The function is from a different engine than the context.
 	//! \retval asOUT_OF_MEMORY The context ran out of memory while allocating call stack.
 	//!
-	//! This method prepares the context for executeion of a script function. It allocates
+	//! This method prepares the context for execution of a script function. It allocates
 	//! the stack space required and reserves space for return value and parameters. The
 	//! default value for parameters and return value is 0.
 	//!
@@ -2823,7 +2846,7 @@ public:
 	//! \retval asEXECUTION_EXCEPTION The execution ended with an exception.
 	//!
 	//! Executes the prepared function until the script returns. If the execution was previously 
-	//! suspended the function resumes where it left of.
+	//! suspended the function resumes where it left off.
 	//!
 	//! Note that if the script freezes, e.g. if trapped in a never ending loop, you may call 
 	//! \ref Abort from another thread to stop execution.
@@ -3006,6 +3029,8 @@ public:
 	//! This method returns a pointer to the argument on the stack for assignment. For object handles, you
 	//! should increment the reference counter. For object values, you should pass a pointer to a copy of the
 	//! object.
+	//!
+	//! \todo Explain better the difference of this compared to GetArgAddress and GetArgObject
 	virtual void *GetAddressOfArg(asUINT arg) = 0;
 	//! \}	
 
@@ -3047,6 +3072,8 @@ public:
 	virtual void   *GetReturnObject() = 0;
 	//! \brief Returns the address of the returned value
 	//! \return A pointer to the return value returned from the script function, or 0 on error.
+	//!
+	//! \todo Explain better the difference of this compared to GetReturnAddress and GetReturnObject
 	virtual void   *GetAddressOfReturnValue() = 0;
 	//! \}
 
@@ -3118,7 +3145,7 @@ public:
 	//! \ref asCALL_THISCALL, \ref asCALL_CDECL_OBJLAST, or \ref asCALL_CDECL_OBJFIRST.
 	//! 
 	//! \see \ref doc_call_script_4
-	virtual int                SetExceptionCallback(asSFuncPtr callback, void *obj, int callConv) = 0;
+	virtual int                SetExceptionCallback(const asSFuncPtr &callback, void *obj, int callConv) = 0;
 	//! \brief Removes the registered callback.
 	//!
 	//! Removes a previously registered callback.
@@ -3157,7 +3184,7 @@ public:
 	//! \ref asCALL_THISCALL, \ref asCALL_CDECL_OBJLAST, or \ref asCALL_CDECL_OBJFIRST.
 	//!
 	//! \see \ref doc_debug
-	virtual int                SetLineCallback(asSFuncPtr callback, void *obj, int callConv) = 0;
+	virtual int                SetLineCallback(const asSFuncPtr &callback, void *obj, int callConv) = 0;
 	//! \brief Removes the registered callback.
 	//!
 	//! Removes a previously registered callback.
@@ -3215,6 +3242,12 @@ public:
 	//! \return Returns a negative value on error.
 	//! \retval asINVALID_ARG The index or stack level is invalid.
 	//! \retval asNOT_SUPPORTED The function is not a script function.
+	//!
+	//! If stackOffset <= 0 the returned variable is one of the function arguments, else it is a local variable.
+	//!
+	//! Temporary variables will have no name.
+	//! 
+	//! Use \ref IsVarInScope to determine if the variable is visible at the current position.
 	virtual int                GetVar(asUINT varIndex, asUINT stackLevel, const char** name, int* typeId = 0, asETypeModifiers* typeModifiers = 0, bool* isVarOnHeap = 0, int* stackOffset = 0) = 0;
 #ifdef AS_DEPRECATED
 	// deprecated since 2022-05-04, 2.36.0
@@ -3341,8 +3374,9 @@ public:
 	//! \param[out] objectRegister Will be set to the address of the object held in the object register, or null if no object is currently held.
 	//! \param[out] objectTypeRegister Will be set to the object type of the object held in the object register, or null if no object is currently held.
 	//! \return A negative value to indicate an error.
-	//! \retval asERROR The \a stackLevel is not 0 or doesn't represent a pushed state for nested calls.
+	//! \retval asNO_FUNCTION The \a stackLevel is not 0 or doesn't represent a pushed state for nested calls.
 	//! \retval asINVALID_ARG The \a stackLevel is out of bounds.
+	//! \retval asERROR The context is in an invalid state.
 	//!
 	//! Call this to get the context state registers for serialization. During serialization the current state registers must be stored. If the context
 	//! has been used for nested calls, then this method must also be used to retrieve any pushed states by passing the \a stackLevel representing the push state.
@@ -3360,7 +3394,8 @@ public:
 	//! \param[out] stackIndex Will be set to the index of the stack memory block.
 	//! \return A negative value to indicate an error.
 	//! \retval asINVALID_ARG The \a stackLevel is out of bounds.
-	//! \retval asERROR The \a stackLevel represent a pushed state for nested calls.
+	//! \retval asNO_FUNCTION The \a stackLevel represent a pushed state for nested calls.
+	//! \retval asERROR The context is in an invalid state.
 	//!
 	//! Use this method to get the call state registers for serialization. Each function on the call stack must be stored during serialization. 
 	//! The number of functions on the call stack can be obtained with \ref GetCallstackSize.
@@ -3527,6 +3562,8 @@ public:
 	//! \brief Returns a pointer to the argument value.
 	//! \param[in] arg The argument index.
 	//! \return A pointer to the argument value.
+	//!
+	//! \todo Explain better the difference of this compared to GetArgAddress and GetArgObject
 	virtual void   *GetAddressOfArg(asUINT arg) = 0;
 	//! \}
 
@@ -3923,9 +3960,10 @@ public:
 	//! \param[out] accessMask The access mask of the property
 	//! \param[out] compositeOffset The offset to composite type if used
 	//! \param[out] isCompositeIndirect Set to false if the composite type is inline
+	//! \param[out] isConst Set to true if the property is read only
 	//! \return A negative value on error
 	//! \retval asINVALID_ARG The \a index is out of bounds
-	virtual int         GetProperty(asUINT index, const char **name, int *typeId = 0, bool *isPrivate = 0, bool *isProtected = 0, int *offset = 0, bool *isReference = 0, asDWORD *accessMask = 0, int *compositeOffset = 0, bool *isCompositeIndirect = 0) const = 0;
+	virtual int         GetProperty(asUINT index, const char **name, int *typeId = 0, bool *isPrivate = 0, bool *isProtected = 0, int *offset = 0, bool *isReference = 0, asDWORD *accessMask = 0, int *compositeOffset = 0, bool *isCompositeIndirect = 0, bool *isConst = 0) const = 0;
 	//! \brief Returns the declaration of the property
 	//! \param[in] index The index of the property
 	//! \param[in] includeNamespace Set to true if the namespace should be included in the declaration.
@@ -4065,13 +4103,13 @@ public:
 	//! The returned value can be null if the module doesn't exist anymore, or if the function 
 	//! is not owned by any module, e.g. registered by the application or it is a \ref doc_callbacks_delegate "delegate".
 	virtual asIScriptModule *GetModule() const = 0;
+#ifdef AS_DEPRECATED
+	// deprecated since 2025-04-25, 2.38.0
 	//! \brief Returns the name of the script section where the function was implemented.
 	//! \return A null terminated string with the script section name where the function was implemented.
-	//!
-	//! The returned pointer is null when the function doesn't originate from a script file, i.e.
-	//! a registered function or an auto-generated script function. It can also be null if the information
-	//! has been removed, e.g. when saving bytecode without debug info.
+	//! \deprecated Since 2.38.0. Use \ref asIScriptFunction::GetDeclaredAt instead
 	virtual const char      *GetScriptSectionName() const = 0;
+#endif
 	//! \brief Returns the name of the config group in which the function was registered.
 	//! \return The name of the config group, or null if not in any group.
 	virtual const char      *GetConfigGroup() const = 0;
@@ -4136,6 +4174,8 @@ public:
 	//! \brief Returns true if the function is declared as 'property'.
 	//! \return True if the function is a property accessor.
 	virtual bool             IsProperty() const = 0;
+	//! \todo document this
+	virtual bool             IsVariadic() const = 0;
 	//! \brief Returns the number of parameters for this function.
 	//! \return The number of parameters.
 	virtual asUINT           GetParamCount() const = 0;
@@ -4157,6 +4197,18 @@ public:
 	virtual int              GetReturnTypeId(asDWORD *flags = 0) const = 0;
 	//! \}
 
+	//! \name Template functions
+	//! \{
+		
+	// Template functions
+	//! \todo document this
+	virtual asUINT           GetSubTypeCount() const = 0;
+	//! \todo document this
+	virtual int              GetSubTypeId(asUINT subTypeIndex = 0) const = 0;
+	//! \todo document this
+	virtual asITypeInfo     *GetSubType(asUINT subTypeIndex = 0) const = 0;
+	//! \}
+	
 	//! \name Type id for function pointers
 	//! \{
 
@@ -4208,9 +4260,16 @@ public:
 	//! \param[in] line A line number
 	//! \return The number of the next line with code, or a negative value if the line is outside the function.
 	virtual int              FindNextLineWithCode(int line) const = 0;
-	//! \brief
-	//! \return
-	//! \todo document this
+	//! \brief Returns the location in the script where the function was declared
+	//! \param[out] scriptSection The name of the script section where the function was declared
+	//! \param[out] row The row number where the function was declared
+	//! \param[out] col The column number where the function was declared
+	//! \return A negative value on error
+	//! \retval asNOT_SUPPORTED The function is not a script function
+	//!
+	//! The returned pointer for \a scriptSection is null when the function doesn't originate from a script file,
+	//! e.g. a registered function or an auto-generated script function. It can also be null if the information
+	//! has been removed, e.g. when saving bytecode without debug info.
 	virtual int              GetDeclaredAt(const char** scriptSection, int* row, int* col) const = 0;
 	//! \}
 
@@ -4225,13 +4284,16 @@ public:
 	//! This function is used by the \ref asIJITCompiler to obtain the byte
 	//! code buffer for building the native machine code representation.
 	virtual asDWORD         *GetByteCode(asUINT *length = 0) = 0;
-	//! \brief
-	//! \return
-	//! \todo document this
+	//! \brief Link the script function with a JIT compiled function
+	//! \return A negative value on error
+	//! \retval asNOT_SUPPORTED The JIT interface used is not version 2
+	//! \retval asERROR The function is not a script function
+	//!
+	//! If a previous JIT function is linked, then AngelScript will call \ref asIJITCompilerV2::CleanFunction 
+	//! to allow the JIT compiler to clean it up before linking the new function.
 	virtual int              SetJITFunction(asJITFunction jitFunc) = 0;
-	//! \brief
-	//! \return
-	//! \todo document this
+	//! \brief Returns the linked JIT compiled function
+	//! \return A pointer to the JIT function, or 0 if there is none.
 	virtual asJITFunction    GetJITFunction() const = 0;
 	//! \}
 
@@ -4525,8 +4587,13 @@ struct asSVMRegisters
 };
 
 //! \ingroup api_auxiliary_interfaces
-//! \brief
-//! \todo document this
+//! \brief An abstract interface for the JIT compiler
+//! 
+//! The abstract interface is the parent interface for the real JIT compiler interfaces.
+//! The choice of the actual JIT compiler interface to use is up to the application and
+//! should be set with a call to \ref asIScriptEngine::SetEngineProperty with \ref asEP_JIT_INTERFACE_VERSION.
+//!
+//! \see \ref doc_adv_jit
 class asIJITCompilerAbstract 
 { 
 public: 
@@ -4535,7 +4602,7 @@ public:
 
 // JIT Compiler interface version 1
 //! \ingroup api_auxiliary_interfaces
-//! \brief The interface that AS use to interact with the JIT compiler
+//! \brief The interface that AS use to interact with the JIT compiler for version 1
 //!
 //! This is the minimal interface that the JIT compiler must implement for version 1
 //! so that AngelScript can request the compilation of the script functions.
@@ -4565,16 +4632,33 @@ public:
 
 // JIT Compiler interface version 2
 //! \ingroup api_auxiliary_interfaces
-//! \brief
-//! \todo document this
+//! \brief The interface that AS use to interact with the JIT compiler for version 2
+//!
+//! This is the minimal interface that the JIT compiler must implement for version 2
+//! so that AngelScript can request the compilation of the script functions.
+//!
+//! \see \ref doc_adv_jit
 class asIJITCompilerV2 : public asIJITCompilerAbstract
 {
 public:
-	//! \brief
-	//! \todo document this
+	//! \brief Called by AngelScript when a new function is compiled
+	//! \param [in] scriptFunc The script function that was just called
+	//!
+	//! AngelScript will call this function when a new script function is compiled.
+	//!
+	//! The JIT compiler is not required to do the JIT compilation at this moment.
+	//! Depending on the JIT compiler strategy it may be better to defer the JIT compilation
+	//! until the full script has been compiled, so better global optimizations can be done.
+	//!
+	//! When the JIT compilation is done, the JIT compiler must use 
+	//! \ref asIScriptFunction::SetJITFunction to link the JIT function with the script function.
 	virtual void NewFunction(asIScriptFunction* scriptFunc) = 0;
-	//! \brief
-	//! \todo document this
+	//! \brief Called by AngelScript when the JIT function must be cleaned up
+	//! \param [in] scriptFunc The script function related to the JIT function
+	//! \param [in] jitFunc The JIT function that was set by the JIT compiler for the script function
+	//!
+	//! AngelScript will call this either when the script function is being destroyed, or when a new 
+	//! JIT function is set on the script function, in which case the old JIT function must be cleaned up.
 	virtual void CleanFunction(asIScriptFunction *scriptFunc, asJITFunction jitFunc) = 0;
 public:
 	virtual ~asIJITCompilerV2() {}

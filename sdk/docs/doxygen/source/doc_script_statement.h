@@ -10,10 +10,7 @@
  - \ref return
  - \ref block
  - \ref try
-
-
-
-
+ - \ref using_ns
 
 
 \section variable Variable declarations
@@ -43,6 +40,9 @@ a random value. Variables of complex types, such as handles and object are initi
 with a default value. For handles this is <code>null</code>, for objects this is 
 what is defined by the object's default constructor.
 
+\todo Describe variables with direct object initialization, i.e. object obj(expr);
+
+\todo Describe how to declare variables of template types, i.e. array<int> arr;
 
 
 
@@ -122,7 +122,7 @@ cannot be determined at compile time it cannot be used in the case values.
 
 
 
-\section while Loops: while / do-while / for
+\section while Loops: while / do-while / for / foreach
 
 <pre>
   // Loop, where the condition is checked before the logic is executed
@@ -165,7 +165,7 @@ part is executed after the logic within the loop, e.g. used to increment an iter
 Multiple variables can be declared in the <code>for</code> loop, separated by <code>,</code>. 
 Likewise, multiple increment expressions can be used in the last part by separating them with <code>,</code>.
 
-
+\todo Document foreach loops. Reference \ref doc_script_class_foreach_ops 
 
 
 
@@ -275,7 +275,27 @@ In some cases exceptions are intentionally raised by the script to interrupt som
 \see \ref doc_script_stdlib_exception
 
 
+\section using_ns Using namespace
 
+It is possible to declare 'using namespace' within a statement block. When this is done, all
+subsequent statements within that block will also search for symbols in the given namespace.
 
+<pre>
+  namespace test
+  {
+    void func() {}
+  }
+  void main()
+  {
+    test::func(); // This call must explicitly inform the namespace
+    {
+      using namespace test;
+      func(); // This call will implicitly search the namespace
+    }
+    test::func(); // This is after the statement block and must again explicitly inform the namespace
+  }
+</pre>
+
+\see \ref doc_global_using_ns "Global 'using namespace"
 
 */

@@ -19,6 +19,7 @@ manual for information on the API it exposes.
  - \subpage doc_script_stdlib_filesystem
  - \subpage doc_script_stdlib_system
  
+\todo Add socket
 
 
 
@@ -45,6 +46,8 @@ Get the exception string for the last exception thrown.
 \note Arrays are only available in the scripts if the application \ref doc_addon_array "registers the support for them". 
 The syntax for using arrays may differ for the application you're working with so consult the application's manual
 for more details.
+
+\todo Explain the foreach support
 
 It is possible to declare array variables with the array identifier followed by the type of the 
 elements within angle brackets. 
@@ -226,6 +229,8 @@ If no match is found the methods will return a negative value.
 
 \subsection doc_datatypes_array_addon_example Script example
   
+\todo update sample to use foreach
+  
 <pre>
   int main()
   {
@@ -253,6 +258,8 @@ If no match is found the methods will return a negative value.
 \note Dictionaries are only available in the scripts if the application \ref doc_addon_dict "registers the support for them". 
 The syntax for using dictionaries may differ for the application you're working with so consult the application's manual
 for more details.
+
+\todo Explain the foreach support
 
 The dictionary stores key-value pairs, where the key is a string, and the value can be of any type. Key-value
 pairs can be added or removed dynamically, making the dictionary a good general purpose container object.
@@ -404,6 +411,8 @@ an uninitialized value of the desired type is returned.
 
 \page doc_script_stdlib_string string
 
+\todo Add format and scan
+
 \note Strings are only available in the scripts if the application \ref doc_addon_std_string "registers the support for them". 
 The syntax for using strings may differ for the application you're working with so consult the application's manual
 for more details.
@@ -486,6 +495,8 @@ The first variant finds the first character in the string that matches on of the
 The second variant finds the first character that doesn't match any of those in \a chars. The third and last variant are the same except they start the search from the end of the string.
 
 \note These functions work on the individual bytes in the strings. They do not attempt to understand encoded characters, e.g. UTF-8 encoded characters that can take up to 4 bytes.
+
+\todo Add info on regexFind (also doesn't handle utf-8)
 
 <b>array<string>@ split(const string &in delimiter) const</b><br>
 
@@ -690,6 +701,8 @@ a rather low precision of seconds only.
 
 
 \section doc_datatype_datetime_addon Supporting datetime object
+
+\todo describe weekday
 
 \subsection doc_addon_datetime_2_construct Constructors
 
@@ -991,6 +1004,8 @@ Raises an exception if the file doesn't exist or cannot be accessed.
 <b>void print(const string &in line)</b>
 
 Prints a line to the standard output.
+
+\todo Describe how to set color on the output
  
 <b>string getInput()</b>
 

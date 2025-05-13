@@ -1,6 +1,6 @@
 /*
    AngelCode Scripting Library
-   Copyright (c) 2003-2024 Andreas Jonsson
+   Copyright (c) 2003-2025 Andreas Jonsson
 
    This software is provided 'as-is', without any express or implied
    warranty. In no event will the authors be held liable for any
@@ -667,6 +667,13 @@ void asCBuilder::ParseScripts()
 
 	if (numErrors == 0)
 	{
+		// Register namespace visibility
+		for (n = 0; n < scripts.GetLength(); n++)
+		{
+			asCScriptNode* node = parsers[n]->GetScriptNode();
+			RegisterNamespaceVisibility(node, scripts[n], engine->nameSpaces[0]);
+		}
+		
 		// Find all type declarations
 		for (n = 0; n < scripts.GetLength(); n++)
 		{
@@ -873,6 +880,80 @@ void asCBuilder::RegisterTypesFromScript(asCScriptNode *node, asCScriptCode *scr
 	}
 }
 
+void asCBuilder::RegisterNamespaceVisibility(asCScriptNode* node, asCScriptCode* script, asSNameSpace* ns)
+{
+	asASSERT(node->nodeType == snScript);
+
+	node = node->firstChild;
+	// First, register all namespaces
+	while ( node )
+	{
+		asCScriptNode* next = node->next;
+		if ( node->nodeType == snNamespace )
+		{
+			asCString nsName;
+			nsName.Assign(&script->code[node->firstChild->tokenPos], node->firstChild->tokenLength);
+			if ( ns->name != "" )
+				nsName = ns->name + "::" + nsName;
+
+			asSNameSpace* nsChild = engine->AddNameSpace(nsName.AddressOf());
+			RegisterNamespaceVisibility(node->lastChild, script, nsChild);
+		}
+		else if ( node->nodeType == snUsing )
+		{
+			node->DisconnectParent();
+			RegisterUsingNamespace(node, script, ns);
+		}
+		node = next;
+	}
+}
+
+// TODO: using: review
+void asCBuilder::AddVisibleNamespaces(asSNameSpace *ns, const asCArray<asSNameSpace*>& visited, asCArray<asSNameSpace*>& pending)
+{
+	asSMapNode<asSNameSpace*, asCArray<asSNameSpace*>>* cursor = 0;
+
+	if (namespaceVisibility.MoveTo(&cursor, ns))
+	{
+		asCArray<asSNameSpace*>& visibilityBuffer = namespaceVisibility.GetValue(cursor);
+		asUINT count = visibilityBuffer.GetLength();
+
+		for (asUINT i = 0; i < count; ++i)
+		{
+			asSNameSpace* visibleNameSpace = visibilityBuffer[i];
+			if (!visited.Exists(visibleNameSpace) && !pending.Exists(visibleNameSpace))
+			{
+				pending.PushLast(visibleNameSpace);
+			}
+		}
+	}
+}
+
+// TODO: using: review
+asSNameSpace *asCBuilder::FindNextVisibleNamespace(const asCArray<asSNameSpace*>& visited, asCArray<asSNameSpace*>& pending, asSNameSpace *parentNs, bool* checkAmbiguous)
+{
+	// First iterate through all pending namespaces that have been included with 'using namespace'
+	asSNameSpace* nextNs = 0;
+	while ( pending.GetLength() != 0 )
+	{
+		asSNameSpace *candidate = pending.PopLast();
+		if (!visited.Exists(candidate))
+		{
+			nextNs = candidate;
+			break;
+		}
+	}
+
+	// Even if the parent namespace has already been visited, it still needs to be traversed
+	if (nextNs == 0)
+		nextNs = parentNs;
+
+	if (checkAmbiguous && !(*checkAmbiguous))
+		*checkAmbiguous = nextNs == engine->nameSpaces[0];
+
+	return nextNs;
+}
+
 void asCBuilder::RegisterNonTypesFromScript(asCScriptNode *node, asCScriptCode *script, asSNameSpace *ns)
 {
 	node = node->firstChild;
@@ -988,16 +1069,6 @@ void asCBuilder::CompileFunctions()
 			{
 				asASSERT(func->parameterTypes.GetLength() == 1 && func->parameterTypes[0].GetTypeInfo() == current->objType);
 
-				// Backup the original message stream and error counter
-				bool                       msgCallback = engine->msgCallback;
-				asSSystemFunctionInterface msgCallbackFunc = engine->msgCallbackFunc;
-				void* msgCallbackObj = engine->msgCallbackObj;
-				int                        originalNumErrors = numErrors;
-
-				// Set the new temporary message stream
-				asCOutputBuffer outBuffer;
-				engine->SetMessageCallback(asFUNCTION(asCOutputBuffer::CDeclCallback), &outBuffer, asCALL_CDECL_OBJLAST);
-
 				int r = 0, c = 0;
 				if (node)
 					current->script->ConvertPosToRowCol(node->tokenPos, &r, &c);
@@ -1009,32 +1080,6 @@ void asCBuilder::CompileFunctions()
 				// This is the default copy constructor that is generated
 				// automatically if not implemented by the user.
 				r = compiler.CompileDefaultCopyConstructor(this, current->script, node, func, classDecl);
-
-				// If the compilation of the default copy constructor fails, then it is silently removed
-				if (r < 0)
-				{
-					asCObjectType* ot = func->objectType;
-					module->m_scriptFunctions.RemoveValue(func);
-					func->module = 0;
-					func->ReleaseInternal();
-					ot->beh.constructors.RemoveValue(ot->beh.copyconstruct);
-					ot->beh.copyconstruct = 0;
-					func->ReleaseInternal();
-
-					func = engine->scriptFunctions[ot->beh.copyfactory];
-					module->m_scriptFunctions.RemoveValue(func);
-					func->module = 0;
-					func->ReleaseInternal();
-					ot->beh.factories.RemoveValue(ot->beh.copyfactory);
-					ot->beh.copyfactory = 0;
-					func->ReleaseInternal();
-				}
-
-				// Restore message callback and error counter
-				engine->msgCallback = msgCallback;
-				engine->msgCallbackFunc = msgCallbackFunc;
-				engine->msgCallbackObj = msgCallbackObj;
-				numErrors = originalNumErrors;
 			}
 
 			engine->preMessage.isSet = false;
@@ -1303,12 +1348,29 @@ int asCBuilder::ParseFunctionDeclaration(asCObjectType *objType, const char *dec
 	// Find name
 	func->name.Assign(&source.code[n->tokenPos], n->tokenLength);
 
+	// Handle templates
+	asCScriptNode* tmp = n;
+	bool isTemplate = false;
+	while(tmp->next->nodeType != snParameterList)
+	{
+		asCString name(decl + tmp->next->tokenPos, tmp->next->tokenLength);
+		asCTypeInfo* templSubType = engine->GetTemplateSubTypeByName(name);
+		if (templSubType == 0)
+			return asOUT_OF_MEMORY;
+
+		func->templateSubTypes.PushLast(asCDataType::CreateType(templSubType,false));
+		templSubType->AddRefInternal();
+		isTemplate = true;
+		tmp = tmp->next;
+	}
+	
 	// Initialize a script function object for registration
 	bool autoHandle;
 
 	// Scoped reference types are allowed to use handle when returned from application functions
-	func->returnType = CreateDataTypeFromNode(node->firstChild, &source, objType ? objType->nameSpace : ns, true, parentClass ? parentClass : objType);
+	func->returnType = CreateDataTypeFromNode(node->firstChild, &source, objType ? objType->nameSpace : ns, true, parentClass ? parentClass : objType, true, 0, isTemplate ? &func->templateSubTypes : 0);
 	func->returnType = ModifyDataTypeFromNode(func->returnType, node->firstChild->next, &source, 0, &autoHandle);
+		
 	if( autoHandle && (!func->returnType.IsObjectHandle() || func->returnType.IsReference()) )
 		return asINVALID_DECLARATION;
 	if( returnAutoHandle ) *returnAutoHandle = autoHandle;
@@ -1323,10 +1385,13 @@ int asCBuilder::ParseFunctionDeclaration(asCObjectType *objType, const char *dec
 
 	// Count number of parameters
 	int paramCount = 0;
-	asCScriptNode *paramList = n->next;
+	asCScriptNode *paramList = tmp->next;
 	n = paramList->firstChild;
 	while( n )
 	{
+		if (n && n->nodeType == snVariadic)
+			break; // Should be the last argument
+		
 		paramCount++;
 		n = n->next->next;
 		if( n && n->nodeType == snIdentifier )
@@ -1348,7 +1413,8 @@ int asCBuilder::ParseFunctionDeclaration(asCObjectType *objType, const char *dec
 	while( n )
 	{
 		asETypeModifiers inOutFlags;
-		asCDataType type = CreateDataTypeFromNode(n, &source, objType ? objType->nameSpace : ns, false, parentClass ? parentClass : objType);
+		asCDataType type;
+		type = CreateDataTypeFromNode(n, &source, objType ? objType->nameSpace : ns, false, parentClass ? parentClass : objType, true, 0, isTemplate ? &func->templateSubTypes : 0);
 		type = ModifyDataTypeFromNode(type, n->next, &source, &inOutFlags, &autoHandle);
 
 		// Reference types cannot be passed by value to system functions
@@ -1379,6 +1445,11 @@ int asCBuilder::ParseFunctionDeclaration(asCObjectType *objType, const char *dec
 
 		// Move to next parameter
 		n = n->next->next;
+		if (n && n->nodeType == snVariadic)
+		{
+			func->SetVariadic(true);
+			break;
+		}
 		if( n && n->nodeType == snIdentifier )
 		{
 			func->parameterNames[index] = asCString(&source.code[n->tokenPos], n->tokenLength);
@@ -2184,6 +2255,37 @@ int asCBuilder::RegisterGlobalVar(asCScriptNode *node, asCScriptCode *file, asSN
 	return 0;
 }
 
+int asCBuilder::RegisterUsingNamespace(asCScriptNode *node, asCScriptCode *file, asSNameSpace *ns)
+{
+	asCScriptNode* n = node->firstChild;
+	asCString name(&file->code[n->tokenPos], n->tokenLength);
+
+	while (n->next)
+	{
+	    n = n->next;
+	    name += "::" + asCString(&file->code[n->tokenPos], n->tokenLength);
+	}
+
+	asSNameSpace* visibleNamespace = engine->AddNameSpace(name.AddressOf());
+	asSMapNode<asSNameSpace*, asCArray<asSNameSpace*>>* cursor = 0;
+
+	if (namespaceVisibility.MoveTo(&cursor, ns))
+	{
+		asCArray<asSNameSpace*>& visibleNamespaces = namespaceVisibility.GetValue(cursor);
+		if (!visibleNamespaces.Exists(visibleNamespace))
+			namespaceVisibility.GetValue(cursor).PushLast(visibleNamespace);
+	}
+	else
+	{
+		asCArray<asSNameSpace*> tmp;
+		tmp.PushLast(visibleNamespace);
+		namespaceVisibility.Insert(ns, tmp);
+	}
+
+	node->Destroy(engine);
+	return 0;
+}
+
 int asCBuilder::RegisterMixinClass(asCScriptNode *node, asCScriptCode *file, asSNameSpace *ns)
 {
 	asCScriptNode *cl = node->firstChild;
@@ -2909,14 +3011,12 @@ void asCBuilder::CleanupEnumValues()
 	}
 }
 
-int asCBuilder::GetNamespaceAndNameFromNode(asCScriptNode *n, asCScriptCode *script, asSNameSpace *implicitNs, asSNameSpace *&outNs, asCString &outName)
+int asCBuilder::GetNamespaceAndNameFromNode(asCScriptNode *n, asCScriptCode *script, asSNameSpace *implicitNs, asSNameSpace *&outNs, asCString &outName, bool *isExplicitNs)
 {
-	// TODO: child funcdef: The node might be a snScope now
 	asASSERT( n->nodeType == snIdentifier );
 
 	// Get the optional scope from the node
-	// TODO: child funcdef: The parentType will be set if the scope is actually a type rather than a namespace
-	asSNameSpace *ns = GetNameSpaceFromNode(n->firstChild, script, implicitNs, 0);
+	asSNameSpace *ns = GetNameSpaceFromNode(n->firstChild, script, implicitNs, 0, 0, isExplicitNs);
 	if( ns == 0 )
 		return -1;
 
@@ -3138,39 +3238,35 @@ void asCBuilder::DetermineTypeRelations()
 		{
 			asSNameSpace *ns;
 			asCString name;
-			if (GetNamespaceAndNameFromNode(node, intfDecl->script, intfType->nameSpace, ns, name) < 0)
+			bool isExplicitNs = false;
+			if (GetNamespaceAndNameFromNode(node, intfDecl->script, intfType->nameSpace, ns, name, &isExplicitNs) < 0)
 			{
 				node = node->next;
 				continue;
 			}
 
-			// Find the object type for the interface
-			asCObjectType *objType = 0;
-			while (ns)
-			{
-				objType = GetObjectType(name.AddressOf(), ns);
-				if (objType) break;
-
-				ns = engine->GetParentNameSpace(ns);
-			}
+			asCObjectType* objType = 0;
+			bool ok = FindObjectTypeOrMixinInNsHierarchy(name, ns, isExplicitNs, node, intfDecl->script, &objType, 0);
 
 			// Check that the object type is an interface
-			bool ok = true;
-			if (objType && objType->IsInterface())
+			if (ok)
 			{
-				// Check that the implemented interface is shared if the base interface is shared
-				if (intfType->IsShared() && !objType->IsShared())
+				if (objType && objType->IsInterface())
 				{
-					asCString str;
-					str.Format(TXT_SHARED_CANNOT_IMPLEMENT_NON_SHARED_s, objType->GetName());
-					WriteError(str, intfDecl->script, node);
+					// Check that the implemented interface is shared if the base interface is shared
+					if (intfType->IsShared() && !objType->IsShared())
+					{
+						asCString str;
+						str.Format(TXT_SHARED_CANNOT_IMPLEMENT_NON_SHARED_s, objType->GetName());
+						WriteError(str, intfDecl->script, node);
+						ok = false;
+					}
+				}
+				else
+				{
+					WriteError(TXT_INTERFACE_CAN_ONLY_IMPLEMENT_INTERFACE, intfDecl->script, node);
 					ok = false;
 				}
-			}
-			else
-			{
-				WriteError(TXT_INTERFACE_CAN_ONLY_IMPLEMENT_INTERFACE, intfDecl->script, node);
-				ok = false;
 			}
 
 			if (ok)
@@ -3231,7 +3327,8 @@ void asCBuilder::DetermineTypeRelations()
 		{
 			asSNameSpace *ns;
 			asCString name;
-			if (GetNamespaceAndNameFromNode(node, file, decl->typeInfo->nameSpace, ns, name) < 0)
+			bool isExplicitNs = false;
+			if (GetNamespaceAndNameFromNode(node, file, decl->typeInfo->nameSpace, ns, name, &isExplicitNs) < 0)
 			{
 				node = node->next;
 				continue;
@@ -3241,105 +3338,99 @@ void asCBuilder::DetermineTypeRelations()
 			asCObjectType *objType = 0;
 			sMixinClass *mixin = 0;
 			asSNameSpace *origNs = ns;
-			while (ns)
-			{
-				objType = GetObjectType(name.AddressOf(), ns);
-				if (objType == 0)
-					mixin = GetMixinClass(name.AddressOf(), ns);
 
-				if (objType || mixin)
-					break;
+			bool ok = FindObjectTypeOrMixinInNsHierarchy(name, ns, isExplicitNs, node, file, &objType, &mixin);
 
-				ns = engine->GetParentNameSpace(ns);
-			}
-
-			if (objType == 0 && mixin == 0)
+			if (ok)
 			{
-				asCString str;
-				if (origNs->name == "")
-					str.Format(TXT_IDENTIFIER_s_NOT_DATA_TYPE_IN_GLOBAL_NS, name.AddressOf());
-				else
-					str.Format(TXT_IDENTIFIER_s_NOT_DATA_TYPE_IN_NS_s, name.AddressOf(), origNs->name.AddressOf());
-				WriteError(str, file, node);
-			}
-			else if (mixin)
-			{
-				AddInterfaceFromMixinToClass(decl, node, mixin);
-			}
-			else if (!(objType->flags & asOBJ_SCRIPT_OBJECT) ||
-				(objType->flags & asOBJ_NOINHERIT))
-			{
-				// Either the class is not a script class or interface
-				// or the class has been declared as 'final'
-				asCString str;
-				str.Format(TXT_CANNOT_INHERIT_FROM_s_FINAL, objType->name.AddressOf());
-				WriteError(str, file, node);
-			}
-			else if (objType->size != 0)
-			{
-				// The class inherits from another script class
-				if (!decl->isExistingShared && CastToObjectType(decl->typeInfo)->derivedFrom != 0)
+				if (objType == 0 && mixin == 0)
 				{
-					if (!multipleInheritance)
-					{
-						WriteError(TXT_CANNOT_INHERIT_FROM_MULTIPLE_CLASSES, file, node);
-						multipleInheritance = true;
-					}
+					asCString str;
+					if (origNs->name == "")
+						str.Format(TXT_IDENTIFIER_s_NOT_DATA_TYPE_IN_GLOBAL_NS, name.AddressOf());
+					else
+						str.Format(TXT_IDENTIFIER_s_NOT_DATA_TYPE_IN_NS_s, name.AddressOf(), origNs->name.AddressOf());
+					WriteError(str, file, node);
 				}
-				else
+				else if (mixin)
 				{
-					// Make sure none of the base classes inherit from this one
-					asCObjectType *base = objType;
-					bool error = false;
-					while (base != 0)
+					AddInterfaceFromMixinToClass(decl, node, mixin);
+				}
+				else if (!(objType->flags & asOBJ_SCRIPT_OBJECT) ||
+					(objType->flags & asOBJ_NOINHERIT))
+				{
+					// Either the class is not a script class or interface
+					// or the class has been declared as 'final'
+					asCString str;
+					str.Format(TXT_CANNOT_INHERIT_FROM_s_FINAL, objType->name.AddressOf());
+					WriteError(str, file, node);
+				}
+				else if (objType->size != 0)
+				{
+					// The class inherits from another script class
+					if (!decl->isExistingShared && CastToObjectType(decl->typeInfo)->derivedFrom != 0)
 					{
-						if (base == decl->typeInfo)
+						if (!multipleInheritance)
 						{
-							WriteError(TXT_CANNOT_INHERIT_FROM_SELF, file, node);
-							error = true;
-							break;
-						}
-
-						base = base->derivedFrom;
-					}
-
-					if (!error)
-					{
-						// A shared type may only inherit from other shared types
-						if ((decl->typeInfo->IsShared()) && !(objType->IsShared()))
-						{
-							asCString msg;
-							msg.Format(TXT_SHARED_CANNOT_INHERIT_FROM_NON_SHARED_s, objType->name.AddressOf());
-							WriteError(msg, file, node);
-							error = true;
+							WriteError(TXT_CANNOT_INHERIT_FROM_MULTIPLE_CLASSES, file, node);
+							multipleInheritance = true;
 						}
 					}
-
-					if (!error)
+					else
 					{
-						if (decl->isExistingShared)
+						// Make sure none of the base classes inherit from this one
+						asCObjectType* base = objType;
+						bool error = false;
+						while (base != 0)
 						{
-							// Verify that the base class is the same as the original shared type
-							if (CastToObjectType(decl->typeInfo)->derivedFrom != objType)
+							if (base == decl->typeInfo)
 							{
-								asCString str;
-								str.Format(TXT_SHARED_s_DOESNT_MATCH_ORIGINAL, decl->typeInfo->GetName());
-								WriteError(str, file, node);
+								WriteError(TXT_CANNOT_INHERIT_FROM_SELF, file, node);
+								error = true;
+								break;
+							}
+
+							base = base->derivedFrom;
+						}
+
+						if (!error)
+						{
+							// A shared type may only inherit from other shared types
+							if ((decl->typeInfo->IsShared()) && !(objType->IsShared()))
+							{
+								asCString msg;
+								msg.Format(TXT_SHARED_CANNOT_INHERIT_FROM_NON_SHARED_s, objType->name.AddressOf());
+								WriteError(msg, file, node);
+								error = true;
 							}
 						}
-						else
+
+						if (!error)
 						{
-							// Set the base class
-							CastToObjectType(decl->typeInfo)->derivedFrom = objType;
-							objType->AddRefInternal();
+							if (decl->isExistingShared)
+							{
+								// Verify that the base class is the same as the original shared type
+								if (CastToObjectType(decl->typeInfo)->derivedFrom != objType)
+								{
+									asCString str;
+									str.Format(TXT_SHARED_s_DOESNT_MATCH_ORIGINAL, decl->typeInfo->GetName());
+									WriteError(str, file, node);
+								}
+							}
+							else
+							{
+								// Set the base class
+								CastToObjectType(decl->typeInfo)->derivedFrom = objType;
+								objType->AddRefInternal();
+							}
 						}
 					}
 				}
-			}
-			else
-			{
-				// The class implements an interface
-				AddInterfaceToClass(decl, node, objType);
+				else
+				{
+					// The class implements an interface
+					AddInterfaceToClass(decl, node, objType);
+				}
 			}
 
 			node = node->next;
@@ -3803,6 +3894,128 @@ void asCBuilder::CompileClasses(asUINT numTempl)
 	}
 
 	if( numErrors > 0 ) return;
+
+	// Iterate through classes and verify if any automatically generated copy constructor can really be compiled,
+	// i.e. all members and the base class can be copied. If not, then remove the auto generated copy constructor 
+	// so it will not be compiled. This is done here when it is known the order of class inheritance, and all classes
+	// have received their members from mixins, etc.
+	for (n = 0; n < classDeclarations.GetLength(); n++)
+	{
+		sClassDeclaration* decl = classDeclarations[n];
+		if (decl->isExistingShared)
+			continue;
+
+		asCObjectType* ot = CastToObjectType(decl->typeInfo);
+		if (ot == 0 || ot->beh.copyconstruct == 0)
+			continue;
+
+		// Find the sFunctionDescriptor to determine if the copy constructor is auto generated or not
+		asUINT funcDesc = asUINT(-1);
+		for (asUINT d = 0; d < functions.GetLength(); d++)
+			if (functions[d] && functions[d]->funcId == ot->beh.copyconstruct)
+			{
+				funcDesc = d;
+				break;
+			}
+
+		if (funcDesc != asUINT(-1) && functions[funcDesc]->node == 0)
+		{
+			// The copy constructor is auto generated. Check if all members and base class can be copied
+			bool canBeCopied = true;
+			asCScriptFunction *func = engine->scriptFunctions[ot->beh.copyconstruct];
+			asCObjectType* objType = func->objectType;
+			if (objType->derivedFrom)
+			{
+				if (objType->derivedFrom->beh.copyconstruct == 0 &&
+					(objType->derivedFrom->beh.construct == 0 || objType->derivedFrom->beh.copy == 0))
+					canBeCopied = false;
+				else
+				{
+					// The base class can be copied. Check if it can be done from a const object
+					// TODO: Should allow it anyway, but the copy constructor should be generated as taking a non-const reference
+					asCScriptFunction* baseFunc = engine->scriptFunctions[objType->derivedFrom->beh.copyconstruct];
+					if (baseFunc && !baseFunc->parameterTypes[0].IsObjectConst())
+						canBeCopied = false;
+					else if (!baseFunc)
+					{
+						baseFunc = engine->scriptFunctions[objType->derivedFrom->beh.copy];
+						if (baseFunc && !baseFunc->parameterTypes[0].IsObjectConst())
+							canBeCopied = false;
+					}
+				}
+			}
+
+			for (asUINT m = 0; canBeCopied && m < objType->properties.GetLength(); m++)
+			{
+				asCObjectProperty* prop = objType->properties[m];
+
+				// Check if the property is inherited
+				asCScriptNode* declNode = 0;
+				for (asUINT p = 0; p < decl->propInits.GetLength(); p++)
+				{
+					if (decl->propInits[p].name == prop->name)
+					{
+						declNode = decl->propInits[p].declNode;
+						break;
+					}
+				}
+
+				// If declNode is null then the property was inherited
+				if (declNode == 0)
+					continue;
+
+				// Check if the property can be copied
+				asCObjectType* propObjType = CastToObjectType(prop->type.GetTypeInfo());
+				if (propObjType && !prop->type.IsObjectHandle() && propObjType->beh.copyconstruct == 0 &&
+					(propObjType->beh.construct == 0 || propObjType->beh.copy == 0))
+					canBeCopied = false;
+				else if(propObjType && !prop->type.IsObjectHandle())
+				{
+					// The property can be copied. Check if it can be done from a const object
+					// TODO: Should allow it anyway, but the copy constructor should be generated as taking a non-const reference
+					asCScriptFunction* baseFunc = engine->scriptFunctions[propObjType->beh.copyconstruct];
+					if (baseFunc && !baseFunc->parameterTypes[0].IsObjectConst())
+						canBeCopied = false;
+					else if (!baseFunc)
+					{
+						baseFunc = engine->scriptFunctions[propObjType->beh.copy];
+						if (baseFunc && !baseFunc->parameterTypes[0].IsObjectConst())
+							canBeCopied = false;
+					}
+				}
+			}
+
+			if (!canBeCopied)
+			{
+				// Remove the function descriptor and the script function that was prepared for compilation
+				asDELETE(functions[funcDesc], sFunctionDescription);
+				functions.RemoveIndex(funcDesc);
+
+				module->m_scriptFunctions.RemoveValue(func);
+				func->module = 0;
+				func->ReleaseInternal();
+				ot->beh.constructors.RemoveValue(ot->beh.copyconstruct);
+				ot->beh.copyconstruct = 0;
+				func->ReleaseInternal();
+
+				// Do the same for the copyfactory
+				for (asUINT d = 0; d < functions.GetLength(); d++)
+					if (functions[d] && functions[d]->funcId == ot->beh.copyfactory)
+					{
+						asDELETE(functions[d], sFunctionDescription);
+						functions.RemoveIndex(d);
+						break;
+					}
+				func = engine->scriptFunctions[ot->beh.copyfactory];
+				module->m_scriptFunctions.RemoveValue(func);
+				func->module = 0;
+				func->ReleaseInternal();
+				ot->beh.factories.RemoveValue(ot->beh.copyfactory);
+				ot->beh.copyfactory = 0;
+				func->ReleaseInternal();
+			}
+		}
+	}
 
 	// Verify which script classes can really form circular references, and mark only those as garbage collected.
 	// This must be done in the correct order, so that a class that contains another class isn't needlessly marked
@@ -4914,11 +5127,16 @@ asCString asCBuilder::GetCleanExpressionString(asCScriptNode *node, asCScriptCod
 	{
 		asUINT len = 0;
 		asETokenClass tok = engine->ParseToken(str.AddressOf() + n, str.GetLength() - n, &len);
-		if( tok != asTC_COMMENT && tok != asTC_WHITESPACE )
+
+		// Replace comments and whitespace with a single space
+		if (tok == asTC_COMMENT || tok == asTC_WHITESPACE)
 		{
-			if( cleanStr.GetLength() ) cleanStr += " ";
-			cleanStr.Concatenate(str.AddressOf() + n, len);
+			if (cleanStr.GetLength() && cleanStr[cleanStr.GetLength() - 1] != ' ')
+				cleanStr += " ";
 		}
+		else
+			cleanStr.Concatenate(str.AddressOf() + n, len);
+
 		n += len;
 	}
 
@@ -5881,7 +6099,76 @@ asCString asCBuilder::GetScopeFromNode(asCScriptNode *node, asCScriptCode *scrip
 	return scope;
 }
 
-asSNameSpace *asCBuilder::GetNameSpaceFromNode(asCScriptNode *node, asCScriptCode *script, asSNameSpace *implicitNs, asCScriptNode **next, asCObjectType **objType)
+bool asCBuilder::FindObjectTypeOrMixinInNsHierarchy(const asCString& name, asSNameSpace* startNs, bool isExplicitNs, asCScriptNode *errNode, asCScriptCode *script, asCObjectType **outObjType, sMixinClass **outMixin)
+{
+	if (outObjType) *outObjType = 0;
+	if (outMixin) *outMixin = 0;
+
+	asSNameSpace* ns = startNs;
+
+	// If not explicit scope, then search the visible namespaces, then search the parent namespaces
+	asCArray<asSNameSpace*> pendingNamespaces;
+	asCArray<asSNameSpace*> visitedNamespaces;
+	bool checkAmbiguousSymbols = !isExplicitNs;
+	asSNameSpace* parentNs = engine->GetParentNameSpace(ns);
+
+	asCObjectType* objType = 0;
+	sMixinClass* mixin = 0;
+	while (ns)
+	{
+		if (!visitedNamespaces.Exists(ns))
+		{
+			visitedNamespaces.PushLast(ns);
+
+			if (!checkAmbiguousSymbols)
+			{
+				objType = GetObjectType(name.AddressOf(), ns);
+				if (objType == 0 && outMixin)
+					mixin = GetMixinClass(name.AddressOf(), ns);
+
+				if (objType || mixin)
+					break;
+			}
+			else
+			{
+				asCObjectType* ot = GetObjectType(name.AddressOf(), ns);
+				sMixinClass* m = 0;
+				if (ot == 0 && outMixin)
+					m = GetMixinClass(name.AddressOf(), ns);
+				if (ot || m)
+				{
+					if (objType || mixin)
+					{
+						asCString msg;
+						msg.Format(TXT_AMBIGUOUS_SYMBOL_NAME_s, name.AddressOf());
+						WriteError(msg, script, errNode);
+						return false;
+					}
+
+					objType = ot;
+					mixin = m;
+				}
+			}
+		}
+
+		AddVisibleNamespaces(ns, visitedNamespaces, pendingNamespaces);
+		ns = FindNextVisibleNamespace(visitedNamespaces, pendingNamespaces, parentNs, &checkAmbiguousSymbols);
+		if (ns == parentNs)
+		{
+			// Only move to the parent namespace if the object type hasn't been found yet
+			if (objType || mixin)
+				break;
+
+			parentNs = engine->GetParentNameSpace(ns);
+		}
+	}
+
+	if (outObjType) *outObjType = objType;
+	if (outMixin) *outMixin = mixin;
+	return true;
+}
+
+asSNameSpace *asCBuilder::GetNameSpaceFromNode(asCScriptNode *node, asCScriptCode *script, asSNameSpace *implicitNs, asCScriptNode **next, asCObjectType **objType, bool *isExplicitNs)
 {
 	if (objType)
 		*objType = 0;
@@ -5891,8 +6178,13 @@ asSNameSpace *asCBuilder::GetNameSpaceFromNode(asCScriptNode *node, asCScriptCod
 	{
 		if (next)
 			*next = node;
+		if (isExplicitNs) 
+			*isExplicitNs = false;
 		return implicitNs ? implicitNs : engine->nameSpaces[0];
 	}
+
+	if (isExplicitNs)
+		*isExplicitNs = true;
 
 	if (next)
 		*next = node->next;
@@ -5926,8 +6218,11 @@ asSNameSpace *asCBuilder::GetNameSpaceFromNode(asCScriptNode *node, asCScriptCod
 				ns = engine->FindNameSpace(scope.AddressOf());
 
 			asCString templateName(&script->code[sn->tokenPos], sn->tokenLength);
-			asCObjectType *templateType = GetObjectType(templateName.AddressOf(), ns);
-			if (templateType == 0 || (templateType->flags & asOBJ_TEMPLATE) == 0)
+
+			asCObjectType* templateType = 0;
+			bool ok = FindObjectTypeOrMixinInNsHierarchy(templateName, ns, scope != "", sn->next, script, &templateType, 0);
+
+			if (!ok || templateType == 0 || (templateType->flags & asOBJ_TEMPLATE) == 0)
 			{
 				// TODO: child funcdef: Report error
 				return ns;
@@ -6019,7 +6314,7 @@ asSNameSpace *asCBuilder::GetNameSpaceByString(const asCString &nsName, asSNameS
 	return ns;
 }
 
-asCDataType asCBuilder::CreateDataTypeFromNode(asCScriptNode *node, asCScriptCode *file, asSNameSpace *implicitNamespace, bool acceptHandleForScope, asCObjectType *currentType, bool reportError, bool *isValid)
+asCDataType asCBuilder::CreateDataTypeFromNode(asCScriptNode *node, asCScriptCode *file, asSNameSpace *implicitNamespace, bool acceptHandleForScope, asCObjectType *currentType, bool reportError, bool *isValid, asCArray<asCDataType> *templSubTypes, asCArray<asSNameSpace*>* scopeVisibleNamespaces)
 {
 	asASSERT(node->nodeType == snDataType || node->nodeType == snIdentifier || node->nodeType == snScope );
 
@@ -6065,19 +6360,30 @@ asCDataType asCBuilder::CreateDataTypeFromNode(asCScriptNode *node, asCScriptCod
 		// Recursively search parent namespaces for matching type
 		asSNameSpace *origNs = ns;
 		asCObjectType *origParentType = parentType;
-		while( (ns || parentType) && !found )
-		{
-			asCTypeInfo *ti = 0;
+		asCArray<asSNameSpace*> pendingNamespaces;
+		asCArray<asSNameSpace*> visitedNamespaces;
+		bool checkAmbiguousSymbols = ns == engine->nameSpaces[0];
 
-			if (currentType)
+		if (scopeVisibleNamespaces)
+		{
+			pendingNamespaces = *scopeVisibleNamespaces;
+		}
+
+		asSNameSpace* parentNs = engine->GetParentNameSpace(ns);
+		while( (ns || parentType) && (!found || checkAmbiguousSymbols))
+		{
+			if (!visitedNamespaces.Exists(ns) || parentType)
 			{
-				// If this is for a template type, then we must first determine if the
-				// identifier matches any of the template subtypes
-				if (currentType->flags & asOBJ_TEMPLATE)
+				visitedNamespaces.PushLast(ns);
+				asCTypeInfo* ti = 0;
+				bool canContinue = true;
+
+				if (templSubTypes)
 				{
-					for (asUINT subtypeIndex = 0; subtypeIndex < currentType->templateSubTypes.GetLength(); subtypeIndex++)
+					// If a list of templSubTypes is provided then first check if the identifier matches any of them
+					for (asUINT subtypeIndex = 0; subtypeIndex < templSubTypes->GetLength(); subtypeIndex++)
 					{
-						asCTypeInfo *type = currentType->templateSubTypes[subtypeIndex].GetTypeInfo();
+						asCTypeInfo* type = ((*templSubTypes)[subtypeIndex]).GetTypeInfo();
 						if (type && str == type->name)
 						{
 							ti = type;
@@ -6085,100 +6391,142 @@ asCDataType asCBuilder::CreateDataTypeFromNode(asCScriptNode *node, asCScriptCod
 						}
 					}
 				}
-
-				if (ti == 0)
+				if (ti == 0 && currentType)
 				{
-					// Check if the type is a child type of the current type
-					ti = GetFuncDef(str.AddressOf(), 0, currentType);
-					if (ti)
+					// If this is for a template type, then we must first determine if the
+					// identifier matches any of the template subtypes
+					if (currentType->flags & asOBJ_TEMPLATE)
 					{
-						dt = asCDataType::CreateType(ti, false);
-						found = true;
+						for (asUINT subtypeIndex = 0; subtypeIndex < currentType->templateSubTypes.GetLength(); subtypeIndex++)
+						{
+							asCTypeInfo* type = currentType->templateSubTypes[subtypeIndex].GetTypeInfo();
+							if (type && str == type->name)
+							{
+								ti = type;
+								break;
+							}
+						}
+					}
+
+					if (ti == 0)
+					{
+						// Check if the type is a child type of the current type
+						ti = GetFuncDef(str.AddressOf(), 0, currentType);
+						if (ti)
+						{
+							if (dt.GetTypeInfo() != 0)
+							{
+								asCString msg;
+								msg.Format(TXT_AMBIGUOUS_SYMBOL_NAME_s, str.AddressOf());
+								WriteError(msg, file, node);
+
+								// Return a dummy
+								return asCDataType::CreatePrimitive(ttInt, isConst);
+							}
+
+							dt = asCDataType::CreateType(ti, false);
+							found = true;
+							canContinue = false;
+						}
 					}
 				}
-			}
 
-			if( ti == 0 )
-				ti = GetType(str.AddressOf(), ns, parentType);
-			if( ti == 0 && !module && currentType )
-				ti = GetTypeFromTypesKnownByObject(str.AddressOf(), currentType);
+				if (ti == 0)
+					ti = GetType(str.AddressOf(), ns, parentType);
+				if (ti == 0 && !module && currentType)
+					ti = GetTypeFromTypesKnownByObject(str.AddressOf(), currentType);
 
-			if( ti && !found )
-			{
-				found = true;
-
-				if( ti->flags & asOBJ_IMPLICIT_HANDLE )
-					isImplicitHandle = true;
-
-				// Make sure the module has access to the object type
-				if( !module || (module->m_accessMask & ti->accessMask) )
+				if (ti && (!found || checkAmbiguousSymbols) && canContinue)
 				{
-					if( asOBJ_TYPEDEF == (ti->flags & asOBJ_TYPEDEF) )
+					if (dt.GetTypeInfo() != 0)
 					{
-						// TODO: typedef: A typedef should be considered different from the original type (though with implicit conversions between the two)
-						// Create primitive data type based on object flags
-						dt = CastToTypedefType(ti)->aliasForType;
-						dt.MakeReadOnly(isConst);
+						asCString msg;
+						msg.Format(TXT_AMBIGUOUS_SYMBOL_NAME_s, str.AddressOf());
+						WriteError(msg, file, node);
+
+						// Return a dummy
+						return asCDataType::CreatePrimitive(ttInt, isConst);
 					}
-					else
+
+					found = true;
+
+					if (ti->flags & asOBJ_IMPLICIT_HANDLE)
+						isImplicitHandle = true;
+
+					// Make sure the module has access to the object type
+					if (!module || (module->m_accessMask & ti->accessMask))
 					{
-						if( ti->flags & asOBJ_TEMPLATE )
+						if (asOBJ_TYPEDEF == (ti->flags & asOBJ_TYPEDEF))
 						{
-							ti = GetTemplateInstanceFromNode(n, file, CastToObjectType(ti), implicitNamespace, currentType, &n);
-							if (ti == 0)
+							// TODO: typedef: A typedef should be considered different from the original type (though with implicit conversions between the two)
+							// Create primitive data type based on object flags
+							dt = CastToTypedefType(ti)->aliasForType;
+							dt.MakeReadOnly(isConst);
+						}
+						else
+						{
+							if (ti->flags & asOBJ_TEMPLATE)
 							{
+								ti = GetTemplateInstanceFromNode(n, file, CastToObjectType(ti), implicitNamespace, currentType, &n);
+								if (ti == 0)
+								{
+									if (isValid)
+										*isValid = false;
+
+									// Return a dummy
+									return asCDataType::CreatePrimitive(ttInt, false);
+								}
+							}
+							else if (n && n->next && n->next->nodeType == snDataType)
+							{
+								if (reportError)
+								{
+									asCString msg;
+									msg.Format(TXT_TYPE_s_NOT_TEMPLATE, ti->name.AddressOf());
+									WriteError(msg, file, n);
+								}
 								if (isValid)
 									*isValid = false;
 
 								// Return a dummy
 								return asCDataType::CreatePrimitive(ttInt, false);
 							}
-						}
-						else if( n && n->next && n->next->nodeType == snDataType )
-						{
-							if (reportError)
-							{
-								asCString msg;
-								msg.Format(TXT_TYPE_s_NOT_TEMPLATE, ti->name.AddressOf());
-								WriteError(msg, file, n);
-							}
-							if (isValid)
-								*isValid = false;
 
-							// Return a dummy
-							return asCDataType::CreatePrimitive(ttInt, false);
+							// Create object data type
+							if (ti)
+								dt = asCDataType::CreateType(ti, isConst);
+							else
+								dt = asCDataType::CreatePrimitive(ttInt, isConst);
 						}
-
-						// Create object data type
-						if( ti )
-							dt = asCDataType::CreateType(ti, isConst);
-						else
-							dt = asCDataType::CreatePrimitive(ttInt, isConst);
 					}
-				}
-				else
-				{
-					if (reportError)
+					else
 					{
-						asCString msg;
-						msg.Format(TXT_TYPE_s_NOT_AVAILABLE_FOR_MODULE, (const char *)str.AddressOf());
-						WriteError(msg, file, n);
+						if (reportError)
+						{
+							asCString msg;
+							msg.Format(TXT_TYPE_s_NOT_AVAILABLE_FOR_MODULE, (const char*)str.AddressOf());
+							WriteError(msg, file, n);
+						}
+
+						dt.SetTokenType(ttInt);
+						if (isValid)
+							*isValid = false;
+
+						// Return a dummy
+						return asCDataType::CreatePrimitive(ttInt, false);
 					}
-
-					dt.SetTokenType(ttInt);
-					if (isValid)
-						*isValid = false;
-
-					// Return a dummy
-					return asCDataType::CreatePrimitive(ttInt, false);
 				}
 			}
 
-			if( !found )
+			if( !found || checkAmbiguousSymbols )
 			{
+				AddVisibleNamespaces(ns, visitedNamespaces, pendingNamespaces);
+				
 				// Try to find it in the parent namespace
-				if( ns )
-					ns = engine->GetParentNameSpace(ns);
+				ns = FindNextVisibleNamespace(visitedNamespaces, pendingNamespaces, parentNs, &checkAmbiguousSymbols);
+				if (parentNs == ns)
+					parentNs = engine->GetParentNameSpace(ns);
+				
 				if (parentType)
 					parentType = 0;
 			}
@@ -6241,7 +6589,7 @@ asCDataType asCBuilder::CreateDataTypeFromNode(asCScriptNode *node, asCScriptCod
 			}
 
 			// Make sure the sub type can be instantiated
-			if( !dt.CanBeInstantiated() )
+			if( !dt.CanBeInstantiated() || dt.IsAuto() )
 			{
 				if (reportError)
 				{

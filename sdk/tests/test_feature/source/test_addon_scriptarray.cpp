@@ -159,30 +159,30 @@ class ClassExceptionInConstructor
 public:
 	ClassExceptionInConstructor()
 	{
-		if( !strstr(asGetLibraryOptions(), "AS_NO_EXCEPTIONS") )
+		if (!strstr(asGetLibraryOptions(), "AS_NO_EXCEPTIONS"))
 			throw std::exception();
 		else
 		{
-			asIScriptContext *ctx = asGetActiveContext();
-			if( ctx ) ctx->SetException("Caught an exception from the application");
+			asIScriptContext* ctx = asGetActiveContext();
+			if (ctx) ctx->SetException("Caught an exception from the application");
 		}
 	}
 	~ClassExceptionInConstructor() {}
-	ClassExceptionInConstructor &operator=(const ClassExceptionInConstructor &) { return *this; }
+	ClassExceptionInConstructor& operator=(const ClassExceptionInConstructor&) { return *this; }
 
-	static void Construct(void *mem) { new(mem) ClassExceptionInConstructor(); }
-	static void Destruct(ClassExceptionInConstructor *mem) { mem->~ClassExceptionInConstructor(); }
+	static void Construct(void* mem) { new(mem) ClassExceptionInConstructor(); }
+	static void Destruct(ClassExceptionInConstructor* mem) { mem->~ClassExceptionInConstructor(); }
 };
 
-CScriptArray *CreateArrayOfStrings()
+CScriptArray* CreateArrayOfStrings()
 {
-	asIScriptContext *ctx = asGetActiveContext();
-	if( ctx )
+	asIScriptContext* ctx = asGetActiveContext();
+	if (ctx)
 	{
 		asIScriptEngine* engine = ctx->GetEngine();
 		asITypeInfo* t = engine->GetTypeInfoByDecl("array<string@>");
 		CScriptArray* arr = CScriptArray::Create(t, 3);
-		for( asUINT i = 0; i < arr->GetSize(); i++ )
+		for (asUINT i = 0; i < arr->GetSize(); i++)
 		{
 			CScriptString** p = static_cast<CScriptString**>(arr->At(i));
 			*p = new CScriptString("test");
@@ -193,7 +193,7 @@ CScriptArray *CreateArrayOfStrings()
 }
 
 static std::stringstream printResult;
-static void print(asIScriptGeneric *gen) 
+static void print(asIScriptGeneric* gen)
 {
 	void* ptr = *(void**)gen->GetAddressOfArg(0);
 	int typeId = gen->GetArgTypeId(0);
@@ -240,6 +240,26 @@ void FillSTLVector(CScriptArray* in, std::vector < T >& out)
 	}
 }
 
+template < class T >
+void FillSTLMatrix(CScriptArray* in, std::vector < std::vector < T > >& out)
+{
+	out.resize(in->GetSize());
+	for (int i = 0; i < (int)in->GetSize(); i++)
+	{
+		CScriptArray* row = (CScriptArray*)(in->At(i));
+		if (row)
+		{
+			FillSTLVector(row, out[i]);
+		}
+	}
+}
+
+std::vector < std::vector < double >> mtx;
+void TakeArrayOfArray(CScriptArray* in)
+{
+	FillSTLMatrix(in, mtx);
+}
+
 void doCalculations(const std::string& /* geom_id */, const int& /* surf_indx */, const std::vector < double >& us, const std::vector < double >& ws, std::vector < double >& k1_out_vec, std::vector < double >& k2_out_vec, std::vector < double >& ka_out_vec, std::vector < double >& kg_out_vec)
 {
 	called = true;
@@ -256,7 +276,7 @@ void doCalculations(const std::string& /* geom_id */, const int& /* surf_indx */
 		ka_out_vec.resize(us.size());
 		kg_out_vec.resize(us.size());
 
-		for (int i = 0; i < us.size(); i++)
+		for (unsigned int i = 0; i < us.size(); i++)
 		{
 			k1_out_vec[i] = us[i];
 			k2_out_vec[i] = ws[i];
@@ -314,6 +334,162 @@ bool Test()
 	CBufferedOutStream bout;
 	asIScriptContext *ctx;
 	asIScriptEngine *engine;
+
+	// Test foreach with array when the array is modified in the foreach loop
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+		engine->RegisterGlobalFunction("void assert(bool)", asFUNCTION(Assert), asCALL_GENERIC);
+		RegisterScriptArray(engine, false);
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void main() { \n"
+			"  array<int> arr = {1,2,3,4,5,7}; \n"
+			"  int sum = 0; \n"
+			"  foreach( auto v, auto i : arr ) \n"
+			"    if( v & 1 == 1 ) arr.removeAt(i); \n"  // attempt to remove every impair number.
+			"  assert( arr == {2,4,7} ); \n" // the algorithm doesn't work because when the element is removed, the iterator skips the next element
+			"} \n");
+
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		r = ExecuteString(engine, "main()", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test foreach with array
+	{
+		engine = asCreateScriptEngine();
+
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+		engine->RegisterGlobalFunction("void assert(bool)", asFUNCTION(Assert), asCALL_GENERIC);
+
+		RegisterScriptArray(engine, false);
+		RegisterStdString(engine);
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void main() {\n"
+			"  array<string> arr = {'hello', 'there'}; \n"
+			"  string value; \n"
+			"  foreach( auto v : arr ) \n"
+			"    value += v; \n"
+			"  assert( value == 'hellothere' ); \n"
+			"  const array<string> @c_arr = arr; \n"
+			"  string value2; \n"
+			"  foreach( auto v, auto i : c_arr ) \n"
+			"    value2 += i + ':' + v + ','; \n"
+			"  assert( value2 == '0:hello,1:there,' ); \n"
+			"} \n");
+
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		r = ExecuteString(engine, "main()", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test conversion when insert to array with handle
+	// Reported by Sam Tupy
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterScriptArray(engine, false);
+		RegisterStdString(engine);
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"class dummy_string {\n"
+			"  private string value; \n"
+			"  dummy_string(const string &in value) {	\n" // implicit conversion from string
+			"    this.value=value; \n"
+			"  }\n"
+			"  dummy_string() {	\n" // need a no-arg one to go in arrays
+			"    this.value=''; \n"
+			"  }\n"
+			"  const string opConv() const {	\n"
+			"    return this.value; \n"
+			"  }\n"
+			"  const string opImplConv() const {	\n"
+			"    return this.value; \n"
+			"  }\n"
+			"}\n"
+			"void main() {	\n"
+			"  array<dummy_string> strings1; \n"
+			"  strings1.insertLast(dummy_string('this is a test')); \n" // exactly what you expect
+			"  strings1.insertLast('this is another test'); \n" // also works because of the conversion constructor
+			"  array<dummy_string@> strings2; \n"
+			"  strings2.insertLast(dummy_string('this is even another test')); \n" // also works
+			"  strings2.insertLast('this is a handle conversion test!'); \n" // dies?
+			"}\n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		r = ExecuteString(engine, "main()", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test passing array<array<double>> to application
+	// https://www.gamedev.net/forums/topic/717597-how-do-i-register-an-angelscript-function-that-passes-an-array-of-array-of-doubles/
+	{
+		engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterScriptArray(engine, true);
+		engine->RegisterGlobalFunction("void TakeArrayOfArray(array<array<double>> &)", asFUNCTION(TakeArrayOfArray), asCALL_CDECL);
+
+		r = ExecuteString(engine, "array<array<double>> arr = {{1,2},{3,4}}; TakeArrayOfArray(arr);");
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (mtx[0][0] != 1 || mtx[0][1] != 2 || mtx[1][0] != 3 || mtx[1][1] != 4)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
 
 	// Allow registering a property with arrays of const handles that cannot be modified by the script
 	// Reported by Tomasz

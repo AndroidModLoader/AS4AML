@@ -78,6 +78,7 @@ void CScriptDictionary::Init(asIScriptEngine *e)
 	// We start with one reference
 	refCount = 1;
 	gcFlag = false;
+	iterGuard = 0;
 
 	// Keep a reference to the engine for as long as we live
 	// We don't increment the reference counter, because the
@@ -310,8 +311,11 @@ void CScriptDictionary::Set(const dictKey_t &key, void *value, int typeId)
 {
 	dictMap_t::iterator it;
 	it = dict.find(key);
-	if( it == dict.end() )
+	if (it == dict.end())
+	{
 		it = dict.insert(dictMap_t::value_type(key, CScriptDictValue())).first;
+		iterGuard++;
+	}
 
 	it->second.Set(engine, value, typeId);
 }
@@ -402,6 +406,7 @@ bool CScriptDictionary::Delete(const dictKey_t &key)
 	{
 		it->second.FreeValue(engine);
 		dict.erase(it);
+		iterGuard++;
 		return true;
 	}
 
@@ -415,6 +420,7 @@ void CScriptDictionary::DeleteAll()
 		it->second.FreeValue(engine);
 
 	dict.clear();
+	iterGuard++;
 }
 
 CScriptArray* CScriptDictionary::GetKeys() const
@@ -1055,6 +1061,63 @@ static void CScriptDictValue_FreeValue_Generic(asIScriptGeneric *gen)
 	self->FreeValue(gen->GetEngine());
 }
 
+//----------------------------------------------------------------------------
+// Foreach support
+CScriptDictionary::CScriptDictIter::CScriptDictIter(const CScriptDictionary* dict) : iter(dict->begin()), refCount(1), iterGuard(dict->iterGuard) {}
+CScriptDictionary::CScriptDictIter::~CScriptDictIter() {}
+
+void CScriptDictionary::CScriptDictIter::AddRef() const
+{
+	asAtomicInc(refCount);
+}
+
+void CScriptDictionary::CScriptDictIter::Release() const
+{
+	if (asAtomicDec(refCount) == 0)
+	{
+		this->~CScriptDictIter();
+		asFreeMem(const_cast<CScriptDictIter*>(this));
+	}
+}
+
+CScriptDictionary::CScriptDictIter* CScriptDictionary::opForBegin() const
+{
+	// Use the custom memory routine from AngelScript to allow application to better control how much memory is used
+	CScriptDictionary::CScriptDictIter* iter = (CScriptDictionary::CScriptDictIter*)asAllocMem(sizeof(CScriptDictionary::CScriptDictIter));
+	new(iter) CScriptDictionary::CScriptDictIter(this);
+	return iter;
+}
+
+bool CScriptDictionary::opForEnd(const CScriptDictionary::CScriptDictIter& iter) const
+{
+	if (iter.iterGuard != iterGuard)
+		return true;
+
+	if (iter.iter == end())
+		return true;
+
+	return false;
+}
+
+CScriptDictionary::CScriptDictIter* CScriptDictionary::opForNext(CScriptDictionary::CScriptDictIter& iter) const
+{
+	if (iter.iterGuard != iterGuard)
+		iter.iter = end();
+	else
+		++iter.iter;
+	return &iter;
+}
+
+const CScriptDictValue& CScriptDictionary::opForValue0(const CScriptDictionary::CScriptDictIter& iter) const
+{
+	return iter.iter.m_it->second;
+}
+
+const dictKey_t& CScriptDictionary::opForValue1(const CScriptDictionary::CScriptDictIter& iter) const
+{
+	return iter.iter.m_it->first;
+}
+
 //--------------------------------------------------------------------------
 // Register the type
 
@@ -1129,6 +1192,19 @@ void RegisterScriptDictionary_Native(asIScriptEngine *engine)
 	r = engine->RegisterObjectBehaviour("dictionary", asBEHAVE_GETGCFLAG, "bool f()", asMETHOD(CScriptDictionary,GetGCFlag), asCALL_THISCALL); assert( r >= 0 );
 	r = engine->RegisterObjectBehaviour("dictionary", asBEHAVE_ENUMREFS, "void f(int&in)", asMETHOD(CScriptDictionary,EnumReferences), asCALL_THISCALL); assert( r >= 0 );
 	r = engine->RegisterObjectBehaviour("dictionary", asBEHAVE_RELEASEREFS, "void f(int&in)", asMETHOD(CScriptDictionary,ReleaseAllReferences), asCALL_THISCALL); assert( r >= 0 );
+
+	// Support foreach
+	r = engine->RegisterObjectType("dictionaryIter", 0, asOBJ_REF); assert(r >= 0);
+	r = engine->RegisterObjectBehaviour("dictionaryIter", asBEHAVE_ADDREF, "void f()", asMETHOD(CScriptDictionary::CScriptDictIter, AddRef), asCALL_THISCALL); assert(r >= 0);
+	r = engine->RegisterObjectBehaviour("dictionaryIter", asBEHAVE_RELEASE, "void f()", asMETHOD(CScriptDictionary::CScriptDictIter, Release), asCALL_THISCALL); assert(r >= 0);
+
+	r = engine->RegisterObjectMethod("dictionary", "dictionaryIter @opForBegin() const", asMETHODPR(CScriptDictionary, opForBegin, () const, CScriptDictionary::CScriptDictIter *), asCALL_THISCALL); assert(r >= 0);
+	r = engine->RegisterObjectMethod("dictionary", "bool opForEnd(dictionaryIter @+) const", asMETHODPR(CScriptDictionary, opForEnd, (const CScriptDictionary::CScriptDictIter&) const, bool), asCALL_THISCALL); assert(r >= 0);
+	r = engine->RegisterObjectMethod("dictionary", "dictionaryIter @+ opForNext(dictionaryIter @+) const", asMETHODPR(CScriptDictionary, opForNext, (CScriptDictionary::CScriptDictIter&) const, CScriptDictionary::CScriptDictIter*), asCALL_THISCALL); assert(r >= 0);
+	r = engine->RegisterObjectMethod("dictionary", "const dictionaryValue &opForValue0(dictionaryIter @+) const", asMETHODPR(CScriptDictionary, opForValue0, (const CScriptDictionary::CScriptDictIter&) const, const CScriptDictValue &), asCALL_THISCALL); assert(r >= 0);
+	r = engine->RegisterObjectMethod("dictionary", "const string &opForValue1(dictionaryIter @+) const", asMETHODPR(CScriptDictionary, opForValue1, (const CScriptDictionary::CScriptDictIter&) const, const dictKey_t&), asCALL_THISCALL); assert(r >= 0);
+
+
 
 #if AS_USE_STLNAMES == 1
 	// Same as isEmpty

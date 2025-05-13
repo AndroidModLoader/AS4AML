@@ -350,6 +350,89 @@ bool Test()
 		engine->ShutDownAndRelease();
 	}
 
+	// Test default copy constructor when base type implements a copy constructor taking a handle
+	// Reported by Sam Tupy
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"class base {									\n"
+			"	base(int id) {}								\n"
+			"	base( const base@ b) {}						\n"
+			"	base@ instance() { return null; }			\n"
+			"	base@ opCall() { return @instance(); }		\n"
+			"}												\n"
+			"class derived : base {							\n"
+			"	derived() { super(1); }						\n"
+			//"   derived( const derived &other ) { super(other); } \n"  // default copy constructor can be compiled automatically, because the base copy constructor is expecting a const handle
+			"	base@ instance() /*override*/ { return derived(this); }	\n"
+			"}												\n"
+			"												\n"
+			"derived g_derived;								\n"
+			"void main() {									\n"
+			"	g_derived();								\n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		r = ExecuteString(engine, "main();", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Default copy constructor must not be compiled when the copy constructor of base class or member only accepts non-const
+	// Reported by Sam Tupy
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"class base {									\n"
+			"	base(int id) {}								\n"
+			"	base( base@ b) {}							\n"
+			"	base@ instance() { return null; }			\n"
+			"	base@ opCall() { return @instance(); }		\n"
+			"}												\n"
+			"class derived : base {							\n"
+			"	derived() { super(1); }						\n"
+			//"   derived( const derived &inout ) delete;		\n"  // default copy constructor must not be compiled, because the base copy constructor is expecting a non-const handle
+			"	base@ instance() /*override*/ { return derived(this); }	\n"
+			"}												\n"
+			"												\n"
+			"derived g_derived;								\n"
+			"void main() {									\n"
+			"	g_derived();								\n"
+			"} \n");
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "test (9, 2) : Info    : Compiling base@ derived::instance()\n"
+			"test (9, 41) : Error   : No matching signatures to 'derived(derived&)'\n"
+			"test (9, 41) : Info    : Candidates are:\n"
+			"test (9, 41) : Info    : derived@ derived()\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
 	// Test auto generated copy constructor in shared class that contains non-copyable member
 	// The copy constructor should not be generated in this case, since it would give error
 	// https://www.gamedev.net/forums/topic/715618-assertion-failed-when-adding-default-copy-constructor/
@@ -1596,7 +1679,7 @@ bool Test()
 		}
 
 		// Initialization of handle members
-		engine->SetMessageCallback(asMETHOD(COutStream,Callback), &out, asCALL_THISCALL);
+		engine->SetMessageCallback(asMETHOD(COutStream, Callback), &out, asCALL_THISCALL);
 		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
 		mod->AddScriptSection("test",
 			"class T { \n"
@@ -1630,24 +1713,51 @@ bool Test()
 			obj->Release();
 
 		// Expressions are evaluated in the scope where they will be executed
-		engine->SetMessageCallback(asMETHOD(COutStream,Callback), &out, asCALL_THISCALL);
-		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
-		mod->AddScriptSection("test",
-			"class Base { Base(int _a) {} int a = _a; } \n"
-			"class T : Base { T(int _a) { if( _a == 0 ) super(42); else super(24); } int b = a; } \n"
-			"void test() { \n"
-			"  T a(0); \n"
-			"  assert( a.b == 42 ); \n"
-			"  T b(1); \n"
-			"  assert( b.b == 24 ); \n"
-			"} \n");
-		r = mod->Build();
-		if( r < 0 )
-			TEST_FAILED;
+		// Before 2.38.0 the members where initialized after the call to super
+		{
+			engine->SetMessageCallback(asMETHOD(COutStream, Callback), &out, asCALL_THISCALL);
+			engine->SetEngineProperty(asEP_MEMBER_INIT_MODE, 0);
+			mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+			mod->AddScriptSection("test",
+				"class Base { Base(int _a) {} int a = _a; } \n"
+				"class T : Base { T(int _a) { if( _a == 0 ) super(42); else super(24); } int b = a; } \n"
+				"void test() { \n"
+				"  T a(0); \n"
+				"  assert( a.b == 42 ); \n"
+				"  T b(1); \n"
+				"  assert( b.b == 24 ); \n"
+				"} \n");
+			r = mod->Build();
+			if (r < 0)
+				TEST_FAILED;
 
-		r = ExecuteString(engine, "test()", mod);
-		if( r != asEXECUTION_FINISHED )
-			TEST_FAILED;
+			r = ExecuteString(engine, "test()", mod);
+			if (r != asEXECUTION_FINISHED)
+				TEST_FAILED;
+		}
+
+		// After 2.38.0 the members are initialized in the beginning even if super is called, except if the member is explicitly initialized
+		{
+			engine->SetMessageCallback(asMETHOD(COutStream, Callback), &out, asCALL_THISCALL);
+			engine->SetEngineProperty(asEP_MEMBER_INIT_MODE, 1);
+			mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+			mod->AddScriptSection("test",
+				"class Base { Base(int _a) {} int a = _a; } \n"
+				"class T : Base { T(int _a) { if( _a == 0 ) super(42); else super(24); } int b = a; } \n"
+				"void test() { \n"
+				"  T a(0); \n"
+				"  assert( a.b == 0 ); \n"
+				"  T b(1); \n"
+				"  assert( b.b == 0 ); \n"
+				"} \n");
+			r = mod->Build();
+			if (r < 0)
+				TEST_FAILED;
+
+			r = ExecuteString(engine, "test()", mod);
+			if (r != asEXECUTION_FINISHED)
+				TEST_FAILED;
+		}
 
 		engine->Release();
 	}

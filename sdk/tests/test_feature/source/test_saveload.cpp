@@ -9,6 +9,7 @@
 #include "utils.h"
 #include "../../../add_on/scriptarray/scriptarray.h"
 #include "../../../add_on/scripthandle/scripthandle.h"
+#include "../../../add_on/scriptfile/scriptfile.h"
 
 
 namespace TestSaveLoad
@@ -396,6 +397,56 @@ bool Test()
 	asIScriptEngine* engine;
 	asIScriptModule* mod;
 
+	// Test saving / loading bytecode with class that cannot generate copy constructor containing other class that cannot generate copy constructor
+	// Problem reported by Sam Tupy
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		RegisterStdString(engine);
+		RegisterScriptFile(engine);
+
+		CBytecodeStream stream((string("AS_DEBUG/bc_") + (sizeof(void*) == 4 ? "32" : "64")).c_str());
+
+		// The order was important for this test. If they had been declared in the other order the test would have succeeded
+		const char* script =
+			"class message_history { \n"
+			"  reader rd; \n"  // auto generated copy constructor is not generated, because reader is not copyable
+			"} \n"
+			"class reader { \n"
+			"  file f; \n"  // auto generated copy constructor is not generated, because file is not copyable
+			"} \n";
+
+		mod = engine->GetModule(0, asGM_ALWAYS_CREATE); assert(mod != NULL);
+		r = mod->AddScriptSection("main", script); assert(r >= 0);
+		r = mod->Build(); assert(r >= 0);
+		r = mod->SaveByteCode(&stream); assert(r >= 0);
+		mod->Discard();
+
+		asDWORD crc32 = ComputeCRC32(&stream.buffer[0], asUINT(stream.buffer.size()));
+		if (crc32 != 0x6B5CC4DF)
+		{
+			PRINTF("The saved byte code has different checksum than the expected. Got 0x%X\n", crc32);
+			TEST_FAILED;
+		}
+
+		mod = engine->GetModule(0, asGM_ALWAYS_CREATE); assert(mod != NULL);
+
+		r = mod->LoadByteCode(&stream);
+		if (r < 0)
+			TEST_FAILED;
+		mod->Discard();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		r = engine->ShutDownAndRelease(); assert(r >= 0);
+	}
+
 	// Test saving / loading byte code when there are multiple variables in different scope occupying the same stack position
 	// Problem reported by Sam Tupy
 	{
@@ -425,7 +476,7 @@ bool Test()
 		mod->Discard();
 
 		asDWORD crc32 = ComputeCRC32(&stream.buffer[0], asUINT(stream.buffer.size()));
-		if (crc32 != 0x606E2B96)
+		if (crc32 != 0x200443CA)
 		{
 			PRINTF("The saved byte code has different checksum than the expected. Got 0x%X\n", crc32);
 			TEST_FAILED;
@@ -475,7 +526,7 @@ bool Test()
 		mod->Discard();
 
 		asDWORD crc32 = ComputeCRC32(&stream.buffer[0], asUINT(stream.buffer.size()));
-		if (crc32 != 0xD1E61780)
+		if (crc32 != 0x9E469FF8)
 		{
 			PRINTF("The saved byte code has different checksum than the expected. Got 0x%X\n", crc32);
 			TEST_FAILED;
@@ -548,7 +599,7 @@ bool Test()
 		mod->Discard();
 
 		asDWORD crc32 = ComputeCRC32(&stream.buffer[0], asUINT(stream.buffer.size()));
-		if (crc32 != 0x2921B64D)
+		if (crc32 != 0xBAA90FEE)
 		{
 			PRINTF("The saved byte code has different checksum than the expected. Got 0x%X\n", crc32);
 			TEST_FAILED;
@@ -1398,7 +1449,7 @@ bool Test()
 		else
 		{
 			asDWORD crc32 = ComputeCRC32(&bc.buffer[0], asUINT(bc.buffer.size()));
-			if (crc32 != 0xA3398BDD)
+			if (crc32 != 0x87D58890)
 			{
 				PRINTF("The saved byte code has different checksum than the expected. Got 0x%X\n", crc32);
 				TEST_FAILED;
@@ -1453,7 +1504,7 @@ bool Test()
 			TEST_FAILED;
 
 		asDWORD crc32 = ComputeCRC32(&bc.buffer[0], asUINT(bc.buffer.size()));
-		if (crc32 != 0x2B348AEB)
+		if (crc32 != 0x6DD76484)
 		{
 			PRINTF("The saved byte code has different checksum than the expected. Got 0x%X\n", crc32);
 			TEST_FAILED;
@@ -1515,7 +1566,7 @@ bool Test()
 			TEST_FAILED;
 
 		asDWORD crc = ComputeCRC32(&bc.buffer[0], asUINT(bc.buffer.size()));
-		if (crc != 2406682749u)
+		if (crc != 184024235u)
 		{
 			PRINTF("Wrong checksum. Got %u\n", crc);
 			TEST_FAILED;
@@ -1695,7 +1746,7 @@ bool Test()
 
 		engine->ShutDownAndRelease();
 
-		if( bout.buffer != "config (62, 0) : Warning : Cannot register template callback without the actual implementation\n" )
+		if( bout.buffer != "config (65, 0) : Warning : Cannot register template callback without the actual implementation\n" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
 			TEST_FAILED;
@@ -1766,6 +1817,9 @@ bool Test()
 					"ep 35 1\n"
 					"ep 36 0\n"
 					"ep 37 0\n"
+					"ep 38 1\n"
+					"ep 39 0\n"
+					"ep 40 1\n"
 					"\n"
 					"// Enums\n"
 					"\n"
@@ -1862,7 +1916,8 @@ bool Test()
 		r = ctx->Execute();
 		if( r != asEXECUTION_EXCEPTION ) // should fail since the imported function is not bound
 			TEST_FAILED;
-		if( string(ctx->GetExceptionString()) == "Unbound function called" )
+		if (string(ctx->GetExceptionString()) != "Unbound function called")
+			TEST_FAILED;
 		ctx->Release();
 
 		CBytecodeStream bytecode("");
@@ -1892,7 +1947,7 @@ bool Test()
 			g_func = 0;
 		}
 
-		engine->Release();
+		engine->ShutDownAndRelease();
 	}
 
 	// Test saving and loading with template in a namespace
@@ -2374,7 +2429,7 @@ bool Test()
 			// Mac OS X PPC has more zeroes, probably due to the bool type being 4 bytes
 		}
 		asDWORD crc32 = ComputeCRC32(&stream.buffer[0], asUINT(stream.buffer.size()));
-		if( crc32 != 0x4FAB3614)
+		if( crc32 != 0xE4913FF2)
 		{
 			PRINTF("The saved byte code has different checksum than the expected. Got 0x%X\n", crc32);
 			TEST_FAILED;
@@ -2392,9 +2447,10 @@ bool Test()
 		if( mod->LoadByteCode(&stream) != 0 )
 			TEST_FAILED;
 
+		const char* section = 0;
 		if( mod->GetFunctionCount() != 6 )
 			TEST_FAILED;
-		else if( string(mod->GetFunctionByIndex(0)->GetScriptSectionName()) != ":1" )
+		else if( mod->GetFunctionByIndex(0)->GetDeclaredAt(&section, 0, 0) >= 0 && string(section) != ":1" )
 			TEST_FAILED;
 
 		// Make sure the parameter names were loaded
@@ -2455,7 +2511,7 @@ bool Test()
 		mod->SaveByteCode(&streamTiny, true);
 		engine->Release();
 
-		asBYTE expected[] = {0x01,0x00,0x00,0x00,0x00,0x00,0x01,0x66,0x02,0x66,0x00,0x40,0x50,0x00,0x00,0x01,0x00,0x00,0x00,0x02,0x3F,0x0A,0x00,0x00,0x00,0x01,0x72,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
+		asBYTE expected[] = {0x01,0x00,0x00,0x00,0x00,0x00,0x01,0x66,0x02,0x66,0x00,0x40,0x52,0x00,0x00,0x01,0x00,0x00,0x00,0x02,0x3F,0x0A,0x00,0x00,0x00,0x01,0x72,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
 		bool match = true;
 		for( asUINT n = 0; n < streamTiny.buffer.size(); n++ )
 			if( streamTiny.buffer[n] != expected[n] )

@@ -224,6 +224,49 @@ void f2(const C*)
 {
 }
 
+// Global template function, registered as "T get<class T, class K>(K lmao)"
+bool get_called_correctly = false;
+void get(asIScriptGeneric* gen)
+{
+	float arg = gen->GetArgFloat(0);
+	get_called_correctly = gen->GetReturnTypeId() == asTYPEID_INT32 && gen->GetArgTypeId(0) == asTYPEID_FLOAT && arg == 1.25f;
+
+	// It is also possible to determine the correct types from the function itself, useful for functions that do not have return type or parameters
+	asIScriptFunction* func = gen->GetFunction();
+	if (func->GetSubTypeId(0) != asTYPEID_INT32 || func->GetSubTypeId(1) != asTYPEID_FLOAT)
+		get_called_correctly = false;
+}
+std::string* make()
+{
+	static std::string singleton("Success");
+	return &singleton;
+}
+// Template method, registered as "void do_smth<class T>(T param)"
+bool do_smth_called_correctly = false;
+void do_smth(asIScriptGeneric* gen)
+{
+	std::string* obj = (std::string*)gen->GetObject();
+	int arg = gen->GetArgDWord(0);
+	do_smth_called_correctly = gen->GetArgTypeId(0) == asTYPEID_INT32 && arg == 100 && (*obj) == "Success";
+}
+
+void q2as_test_bug(asIScriptGeneric* /* gen */)
+{
+
+}
+
+static void ScriptTestGen(asIScriptGeneric* gen)
+{
+	gen->SetReturnDWord(gen->GetArgDWord(0));
+}
+
+bool error = false;
+void print(void* p, int typeId)
+{
+	error = error || (typeId != asTYPEID_INT32);
+	error = error || (*(int*)p != 10);
+}
+
 bool Test()
 {
 	RET_ON_MAX_PORT
@@ -232,6 +275,295 @@ bool Test()
 	int r;
 	COutStream out;
 	CBufferedOutStream bout;
+
+	// Test saving bytecode with template functions
+	// https://www.gamedev.net/forums/topic/718083-template-functions-pre-compiled-byte-code/
+	{
+		asIScriptEngine* engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+		engine->RegisterGlobalFunction("void assert(bool)", asFUNCTION(Assert), asCALL_GENERIC);
+		engine->RegisterGlobalFunction("T Test<T>(T v)", asFUNCTION(ScriptTestGen), asCALL_GENERIC);
+		engine->SetDefaultNamespace("ns");
+		engine->RegisterGlobalFunction("T Test2<T>(T v)", asFUNCTION(ScriptTestGen), asCALL_GENERIC);
+		engine->SetDefaultNamespace("");
+		engine->RegisterObjectType("lmao", 0, asOBJ_REF | asOBJ_NOCOUNT);
+		engine->RegisterObjectBehaviour("lmao", asBEHAVE_FACTORY, "lmao@ f()", asFUNCTION(make), asCALL_CDECL);
+		engine->RegisterObjectMethod("lmao", "void do_smth<class T>(T param)", asFUNCTION(do_smth), asCALL_GENERIC);
+
+		do_smth_called_correctly = false;
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void testfunc() \n"
+			"{ \n"
+			"	auto n = Test<int>(10); \n"
+			"   assert( n == 10 ); \n"
+			"   auto m = ns::Test2<int>(15); \n"
+			"   assert( m == 15 ); \n"
+			"   lmao l; \n"
+			"   l.do_smth<int>(100); \n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		CBytecodeStream st("test");
+		r = mod->SaveByteCode(&st);
+		if (r < 0)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+		engine->RegisterGlobalFunction("void assert(bool)", asFUNCTION(Assert), asCALL_GENERIC);
+		engine->RegisterGlobalFunction("T Test<T>(T v)", asFUNCTION(ScriptTestGen), asCALL_GENERIC);
+		engine->SetDefaultNamespace("ns");
+		engine->RegisterGlobalFunction("T Test2<T>(T v)", asFUNCTION(ScriptTestGen), asCALL_GENERIC);
+		engine->SetDefaultNamespace("");
+		engine->RegisterObjectType("lmao", 0, asOBJ_REF | asOBJ_NOCOUNT);
+		engine->RegisterObjectBehaviour("lmao", asBEHAVE_FACTORY, "lmao@ f()", asFUNCTION(make), asCALL_CDECL);
+		engine->RegisterObjectMethod("lmao", "void do_smth<class T>(T param)", asFUNCTION(do_smth), asCALL_GENERIC);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		r = mod->LoadByteCode(&st);
+		if (r < 0)
+			TEST_FAILED;
+
+		r = ExecuteString(engine, "testfunc()", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (!do_smth_called_correctly)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+	// https://www.gamedev.net/forums/topic/717373-support-for-template-functions-is-now-implemented-in-2380-wip/5466542/
+	{
+		asIScriptEngine* engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+		engine->RegisterGlobalFunction("T Test<T>(T v)", asFUNCTION(ScriptTestGen), asCALL_GENERIC);
+		engine->RegisterGlobalFunction("void print(?&in)", asFUNCTION(print), asCALL_CDECL);
+
+		r = ExecuteString(engine, 
+			"auto n = Test<int>(10);\n"
+			"print(n); \n"// This works and will print 10.
+			"print(Test<int>(10));\n" // This forces typeId to be 10, and the print function fails
+		);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (error)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+	// Test passing a null argument to a template function
+	// Reported by Paril
+	{
+		asIScriptEngine* engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+		RegisterStdString(engine);
+		engine->RegisterGlobalFunction("T @+find_by_str<T>(T @+from, const string &in member, const string &in value)", asFUNCTION(0), asCALL_GENERIC);
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void testfunc() \n"
+			"{ \n"
+			"	find_by_str(null, '', ''); \n"  // Compiler cannot deduce the type from a null pointer
+			"} \n");
+		r = mod->Build();
+		if (r >= 0)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "test (1, 1) : Info    : Compiling void testfunc()\n"
+						   "test (3, 13) : Error   : Template 'find_by_str' expects 1 sub type(s)\n")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+
+	// Make sure object types are correctly released
+	// Reported by Paril
+	{
+		asIScriptEngine* engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+		engine->RegisterGlobalFunction("T @+ test_bug<T>(T @+ from)", asFUNCTION(q2as_test_bug), asCALL_GENERIC);
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"funcdef void blocked2_f(ASEntity2 &, ASEntity2 &); \n"
+			"class moveinfo2_t \n"
+			"{ \n"
+			"	blocked2_f    @blocked; \n"
+			"} \n"
+			"class ASEntity2 \n"
+			"{ \n"
+			"	moveinfo2_t  moveinfo; \n"
+			"} \n"
+			"void testfunc() \n"
+			"{ \n"
+			"	ASEntity2 temp; \n"
+			"	test_bug<ASEntity2>(temp); \n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		asITypeInfo *type = mod->GetTypeInfoByName("ASEntity2");
+		assert(type);
+
+		r = ExecuteString(engine, "testfunc()", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+	// Test parsing for template with multiple subtypes and auto declaration
+	// Reported by Patrick Jeeves
+	{
+		asIScriptEngine* engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		engine->SetEngineProperty(asEP_INIT_GLOBAL_VARS_AFTER_BUILD, 0);
+
+		// register template with 2 subtypes
+		engine->RegisterObjectType("MyTmpl<class S, class T>", 0, asOBJ_REF | asOBJ_TEMPLATE);
+		engine->RegisterObjectBehaviour("MyTmpl<S,T>", asBEHAVE_FACTORY, "MyTmpl<S,T> @f(int&in)", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterObjectBehaviour("MyTmpl<S,T>", asBEHAVE_ADDREF, "void f()", asFUNCTION(0), asCALL_GENERIC);
+		engine->RegisterObjectBehaviour("MyTmpl<S,T>", asBEHAVE_RELEASE, "void f()", asFUNCTION(0), asCALL_GENERIC);
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"class U {} class V {} \n"
+			"MyTmpl<U, V>@ g_obj1; \n"
+			"auto@ g_obj2 = MyTmpl<U, V>(); \n"
+			"void main() { \n"
+			"  MyTmpl<U, V>@ obj1; \n"
+			"  auto@ obj2 = MyTmpl<U, V>(); \n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test template methods and functions
+	// Initial implementation provided by MindOfTony
+	{
+		asIScriptEngine* engine = asCreateScriptEngine(ANGELSCRIPT_VERSION);
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		engine->RegisterObjectType("lmao", 0, asOBJ_REF | asOBJ_NOCOUNT);
+		engine->RegisterObjectBehaviour("lmao", asBEHAVE_FACTORY, "lmao@ f()", asFUNCTION(make), asCALL_CDECL);
+
+		// Register a template method on the object type
+		do_smth_called_correctly = false;
+		r = engine->RegisterObjectMethod("lmao", "void do_smth<class T>(T param)", asFUNCTION(do_smth), asCALL_GENERIC);
+		if (r < 0)
+			TEST_FAILED;
+		// Retrieve the script function and check that it is a template function and that it has template sub types
+		asIScriptFunction* func = engine->GetFunctionById(r);
+		if (func == 0 || func->GetFuncType() != asFUNC_TEMPLATE)
+			TEST_FAILED;
+		if (string(func->GetDeclaration(true, true, true)) != "void lmao::do_smth<T>(T param)")
+			TEST_FAILED;
+		if (func->GetSubTypeCount() != 1 || std::string(func->GetSubType(0)->GetName()) != "T")
+			TEST_FAILED;
+
+		// Register a global template function
+		engine->SetDefaultNamespace("nm");
+		r = engine->RegisterGlobalFunction("T get<class T, class K>(K lmao)", asFUNCTION(get), asCALL_GENERIC, 0);
+		if (r < 0)
+			TEST_FAILED;
+		engine->SetDefaultNamespace("");
+		// Retrieve the script function and check that it is a template function and that it has template sub types
+		func = engine->GetFunctionById(r);
+		if (func == 0 || func->GetFuncType() != asFUNC_TEMPLATE)
+			TEST_FAILED;
+		if (string(func->GetDeclaration(true, true, true)) != "T nm::get<T,K>(K lmao)")
+			TEST_FAILED;
+		if (func->GetSubTypeCount() != 2 || std::string(func->GetSubType(1)->GetName()) != "K" )
+			TEST_FAILED;
+
+		asIScriptModule* mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test", R"(
+				void main()
+				{
+					lmao lol;
+					lol.do_smth<int>(100);
+					nm::get<int, float>(1.25);
+				}
+			)");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		r = ExecuteString(engine, "main()", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		if (!get_called_correctly)
+			TEST_FAILED;
+		if (!do_smth_called_correctly)
+			TEST_FAILED;
+
+		// It is not possible to call a template function
+		asIScriptContext *ctx = engine->CreateContext();
+		r = ctx->Prepare(func);
+		if (r < 0) TEST_FAILED; // The prepare function doesn't check the type
+		r = ctx->Execute();
+		if (r != asEXECUTION_EXCEPTION)
+			TEST_FAILED;
+		ctx->Release();
+
+		engine->ShutDownAndRelease();
+	}
 
 	// Template specialization with multiple subtypes
 	// Reported by Stefan Blumer
@@ -270,7 +602,7 @@ bool Test()
 		if (type->GetSubTypeId(0) != asTYPEID_INT32 || type->GetSubTypeId(1) != asTYPEID_FLOAT)
 			TEST_FAILED;
 
-		engine->Release();
+		engine->ShutDownAndRelease();
 	}
 
 	// Test template returning another template
@@ -1282,10 +1614,7 @@ bool Test()
 		if( r >= 0 )
 			TEST_FAILED;
 		if( bout.buffer != "mod (1, 7) : Info    : Compiling auto generated T::T()\n"
-						   "mod (1, 23) : Error   : No default constructor for object of type 'MyTmpl'.\n"
-						   "mod (2, 26) : Info    : Compiling S::S()\n"
-						   "mod (2, 34) : Error   : No appropriate opAssign method found in 'MyTmpl' for value assignment\n"
-						   "mod (2, 23) : Error   : No default constructor for object of type 'MyTmpl'.\n" )
+						   "mod (1, 23) : Error   : No default constructor for object of type 'MyTmpl'.\n" )
 		{
 			PRINTF("%s", bout.buffer.c_str());
 			TEST_FAILED;

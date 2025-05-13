@@ -57,6 +57,7 @@ bool TestOptimize();
 bool TestNotInitialized();
 bool TestVector3();
 
+namespace TestForEach           { bool Test(); }
 namespace TestException         { bool Test(); }
 namespace TestCDeclReturn       { bool Test(); }
 namespace TestCustomMem         { bool Test(); }
@@ -171,6 +172,7 @@ namespace Test_Addon_ContextMgr    { bool Test(); }
 namespace Test_Addon_ScriptFile    { bool Test(); }
 namespace Test_Addon_DateTime      { bool Test(); }
 namespace Test_Addon_StdString     { bool Test(); }
+namespace Test_Addon_ScriptSocket  { bool Test(); }
 
 #include "utils.h"
 
@@ -243,7 +245,13 @@ int allTests()
 	if( Test_Addon_Dictionary::Test()    ) goto failed; else PRINTF("-- Test_Addon_Dictionary passed\n");
 	if( Test_Addon_DateTime::Test()      ) goto failed; else PRINTF("-- Test_Addon_DateTime passed\n");
 	if( Test_Addon_StdString::Test()     ) goto failed; else PRINTF("-- Test_Addon_StdString passed\n");
+#ifndef _WIN32
+	PRINTF("Skipping test Addon_ScriptSocket as it only works on Windows\n");
+#else
+	if( Test_Addon_ScriptSocket::Test()  ) goto failed; else PRINTF("-- Test_Addon_ScriptSocket passed\n");
+#endif
 
+	if( TestForEach::Test()                     ) goto failed; else PRINTF("-- TestForEach passed\n");
 	if( TestContext::Test()                     ) goto failed; else PRINTF("-- TestContext passed\n");
 	if( TestComposition::Test()                 ) goto failed; else PRINTF("-- TestComposition passed\n");
 	if( TestPropIntegerDivision::Test()         ) goto failed; else PRINTF("-- TestPropIntegerDivision passed\n");

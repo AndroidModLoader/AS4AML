@@ -5,6 +5,87 @@ namespace TestVarType
 
 static const char * const TESTNAME = "TestVarType";
 
+void sumi_generic(asIScriptGeneric* gen)
+{
+	int result = 0;
+
+	int count = gen->GetArgCount();
+	for (int i = 0; i < count; ++i)
+	{
+		asDWORD flags;
+		int typeId = gen->GetArgTypeId(i, &flags);
+		if (typeId & ~asTYPEID_MASK_SEQNBR)
+			continue;
+
+		switch (typeId)
+		{
+		case asTYPEID_INT32:
+			if ((flags & asTM_INREF) || (flags & asTM_INOUTREF))
+				result += *(int*)gen->GetArgAddress(i);
+			else
+				result += (int)gen->GetArgDWord(i);
+			break;
+		}
+	}
+
+	gen->SetReturnDWord(result);
+}
+
+void sum_generic(asIScriptGeneric* gen)
+{
+	float result = gen->GetArgFloat(0);
+
+	int count = gen->GetArgCount();
+	for (int i = 1; i < count; ++i)
+	{
+		asDWORD flags;
+		int typeId = gen->GetArgTypeId(i, &flags);
+		if (typeId & ~asTYPEID_MASK_SEQNBR)
+			continue;
+
+		assert(flags & asTM_INREF);
+
+		switch (typeId)
+		{
+		case asTYPEID_INT32:
+			result += *(int*)gen->GetArgAddress(i);
+			break;
+
+		case asTYPEID_FLOAT:
+			result += *(float*)gen->GetArgAddress(i);
+		}
+	}
+
+	gen->SetReturnFloat(result);
+}
+
+
+class my_ints
+{
+public:
+	std::vector<int> values;
+
+	my_ints* get()
+	{
+		return this;
+	}
+
+	static void append_generic(asIScriptGeneric* gen)
+	{
+		my_ints& is = *(my_ints*)gen->GetObject();
+
+		int i = 0;
+		for (; i < gen->GetArgCount(); ++i)
+		{
+			assert(gen->GetArgTypeId(i) == asTYPEID_INT32);
+			int v = (int)gen->GetArgDWord(i);
+
+			is.values.push_back(v);
+		}
+
+		gen->SetReturnDWord(i);
+	}
+};
 
 // AngelScript syntax: void testFuncI(?& in)
 // C++ syntax: void testFuncI(void *ref, int typeId)
@@ -96,6 +177,24 @@ void testFuncSI_generic(asIScriptGeneric *gen)
 }
 
 
+void testSetReturnObject(asIScriptGeneric* gen)
+{
+	std::string t = "test";
+	gen->SetReturnObject(&t);
+}
+
+
+int numArgs = 0;
+void testFactVariadic(asIScriptGeneric* gen)
+{
+	numArgs = gen->GetArgCount();
+}
+
+asIScriptFunction* calledFunc = 0;
+void func1(asIScriptGeneric* gen)
+{
+	calledFunc = gen->GetFunction();
+}
 
 bool Test()
 {
@@ -108,6 +207,305 @@ bool Test()
  	asIScriptEngine *engine = 0;
 	asIScriptModule *mod = 0;
 	asIScriptContext *ctx = 0;
+
+	// Test saving and loading bytecode using variadic functions
+	// Reported by Paril
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		RegisterStdString(engine);
+
+		bout.buffer = "";
+
+		engine->RegisterGlobalFunction("void assert(bool)", asFUNCTION(Assert), asCALL_GENERIC);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"void func() \n"
+			"{ \n"
+			"	string str = format('{} {} {} {}', 1, 3, 5, 7); \n"
+			"   assert( str == '1 3 5 7' ); \n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		r = ExecuteString(engine, "func()", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		CBytecodeStream stream((std::string("AS_DEBUG/bc_") + (sizeof(void*) == 4 ? "32" : "64")).c_str());
+		r = mod->SaveByteCode(&stream); assert(r >= 0);
+		mod->Discard();
+
+		mod = engine->GetModule("test2", asGM_ALWAYS_CREATE);
+		r = mod->LoadByteCode(&stream);
+		if (r < 0)
+			TEST_FAILED;
+
+		r = ExecuteString(engine, "func()", mod);
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+	// Test func overload between 'int &out' and '? &out' with enum expression. The correct one to use is '? &out'
+	// Reported by Paril
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		RegisterStdString(engine);
+
+		bout.buffer = "";
+
+		engine->RegisterGlobalFunction("void test(int32 & out)", asFUNCTION(func1), asCALL_GENERIC);
+		engine->RegisterGlobalFunction("void test(? & out)", asFUNCTION(func1), asCALL_GENERIC);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"enum MyEnum { Val = 50 } \n"
+			"void func() \n"
+			"{ \n"
+			"	MyEnum v = MyEnum::Val; \n"
+			"	test(v); \n" // Which function is called?
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		calledFunc = 0;
+		r = ExecuteString(engine, "func()", mod);
+		if (r < 0)
+			TEST_FAILED;
+
+		if (std::string(calledFunc->GetDeclaration()) != "void test(?&out)")
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+	// Test ... in constructor
+	// Reported by Paril
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		RegisterStdString(engine);
+
+		bout.buffer = "";
+
+		engine->RegisterObjectType("test", 0, asOBJ_REF | asOBJ_NOCOUNT);
+		engine->RegisterObjectBehaviour("test", asBEHAVE_FACTORY, "test @f(const ?&in ...)", asFUNCTION(testFactVariadic), asCALL_GENERIC);
+
+		numArgs = 0;
+		r = ExecuteString(engine, "test @t = test(1,2,3);");
+		if (r != asEXECUTION_FINISHED)
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (numArgs != 3)
+			TEST_FAILED;
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+	// Test issue with asIGeneric::SetReturnObject
+	// https://www.gamedev.net/forums/topic/717861-returning-an-object-on-the-stack-in-a-variadic-function-causes-a-crash/5468071/
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		RegisterStdString(engine);
+
+		bout.buffer = "";
+
+		engine->RegisterGlobalFunction("void assert(bool)", asFUNCTION(Assert), asCALL_GENERIC);
+		engine->RegisterGlobalFunction("string test(const ?&in ...)", asFUNCTION(testSetReturnObject), asCALL_GENERIC);
+
+		r = ExecuteString(engine, "assert( test(1,2) == 'test' );");
+		if( r != asEXECUTION_FINISHED )
+			TEST_FAILED;
+
+		engine->ShutDownAndRelease();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+	}
+
+	// Test issue with variadic and stack size
+	// Reported by Paril
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		RegisterStdString(engine);
+
+		bout.buffer = "";
+
+		engine->RegisterGlobalFunction("void assert(bool)", asFUNCTION(Assert), asCALL_GENERIC);
+
+		mod = engine->GetModule("test", asGM_ALWAYS_CREATE);
+		mod->AddScriptSection("test",
+			"string func(string a, string b, string c) { \n"
+			"  assert( a == 'a' ); \n"
+			"  assert( b == 'b' ); \n"
+			"  assert( c == '1;2;' ); \n"
+			"  return a + b + c; \n"
+			"} \n"
+			"void main() {\n"
+			"  string t = func('a', 'b', format('{};{};', 1, 2) ); \n"
+			"  assert( t == 'ab1;2;' ); \n"
+			"} \n");
+		r = mod->Build();
+		if (r < 0)
+			TEST_FAILED;
+
+		ctx = engine->CreateContext();
+		r = ExecuteString(engine, "main()", mod, ctx);
+		if (r != asEXECUTION_FINISHED)
+		{
+			TEST_FAILED;
+			if (r == asEXECUTION_EXCEPTION)
+				PRINTF("%s\n", GetExceptionInfo(ctx, true).c_str());
+		}
+		ctx->Release();
+
+		if (bout.buffer != "")
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test variadic with fixed type
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		r = engine->RegisterGlobalFunction(
+			"int sumi(int init, const int&in ...)",
+			asFUNCTION(sumi_generic),
+			asCALL_GENERIC
+		);
+		if (r < 0)
+			TEST_FAILED;
+
+		int sum;
+		r = ExecuteString(engine, "return sumi(1000, 100, 10);", &sum, asTYPEID_INT32);
+		if (r < 0)
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+		if (sum != 1110)
+		{
+			PRINTF("%d\n", sum);
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test variadic with var arg type
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		r = engine->RegisterGlobalFunction(
+			"float sum(float init, const ?&in ...)",
+			asFUNCTION(sum_generic),
+			asCALL_GENERIC
+		);
+		if (r < 0)
+			TEST_FAILED;
+
+		float sum;
+		r = ExecuteString(engine, "return sum(1.5f, 5, 0.6f);", &sum, asTYPEID_FLOAT);
+		if (r < 0)
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+		if ((int)sum != 7)
+		{
+			PRINTF("%f\n", sum);
+			TEST_FAILED;
+		}
+
+		engine->ShutDownAndRelease();
+	}
+
+	// Test variadic in class methods
+	{
+		engine = asCreateScriptEngine();
+		engine->SetMessageCallback(asMETHOD(CBufferedOutStream, Callback), &bout, asCALL_THISCALL);
+		bout.buffer = "";
+
+		r = engine->RegisterObjectType("my_ints", sizeof(my_ints), asOBJ_REF | asOBJ_NOHANDLE);
+		if (r < 0)
+			TEST_FAILED;
+
+		r = engine->RegisterObjectMethod(
+			"my_ints",
+			"int append(int...)",
+			asFUNCTION(&my_ints::append_generic),
+			asCALL_GENERIC
+		);
+		if (r < 0)
+			TEST_FAILED;
+
+		my_ints is;
+
+		r = engine->RegisterGlobalFunction(
+			"my_ints& get()",
+			asMETHOD(my_ints, get),
+			asCALL_THISCALL_ASGLOBAL,
+			&is
+		);
+		if (r < 0)
+			TEST_FAILED;
+
+		int count;
+		r = ExecuteString(engine, "return get().append(1, 10, 100);", &count, asTYPEID_INT32);
+		if (r < 0)
+		{
+			PRINTF("%s", bout.buffer.c_str());
+			TEST_FAILED;
+		}
+		if (count != 3)
+		{
+			PRINTF("%d\n", count);
+			TEST_FAILED;
+		}
+
+		assert(is.values[0] == 1);
+		assert(is.values[1] == 10);
+		assert(is.values[2] == 100);
+
+		engine->ShutDownAndRelease();
+	}
 
 	// Test behaviour of var type with unsafe references
 	{
